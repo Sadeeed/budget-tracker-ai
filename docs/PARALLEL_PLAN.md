@@ -3,6 +3,7 @@
 > **Specification:** [`DESIGN.md`](./DESIGN.md)  
 > **Completion checklist:** [`TODO.md`](./TODO.md)  
 > **Timebox:** 3–4 hours, with both developers working concurrently.
+> **Runtime:** Both developers use Python 3.10.x and root `constraints.txt`; Dev 1 owns any dependency-constraint changes and includes `-c constraints.txt` in `requirements.txt`. Verify setup and tests on that interpreter, not the system default.
 
 ## 1. Ownership
 
@@ -26,7 +27,7 @@ Paths below follow the suggested layout in `DESIGN.md`; agree on the actual proj
 - `csv_import.py`, `finance.py`, `notifications.py` (rules and durable event lifecycle)
 - `sample_data/`, including synthetic CSVs and receipt fixtures
 - `tests/test_finance.py`, `tests/test_import.py`, `tests/test_invoices.py`, `tests/test_alerts.py`
-- `requirements.txt`, `.env.example`, `.gitignore`, `README.md`
+- `requirements.txt`, `constraints.txt`, `pyproject.toml`, `.python-version`, `.env.example`, `.gitignore`, `README.md`
 
 **Dev 2 owns:**
 - `ai_service.py`, `invoice_extract.py`, `prompts.py`, `watch_alerts.py`
@@ -35,6 +36,8 @@ Paths below follow the suggested layout in `DESIGN.md`; agree on the actual proj
 - `docs/INTEGRATION_STATUS.md` — installed SDK version, verified methods/payload shapes, live results, blockers; no secrets or raw payloads
 
 Dev 2 sends dependency/config/schema needs to Dev 1 rather than editing shared foundation files. Dev 1 owns updates to `TODO.md` and the final README; each developer reports completed checklist items and evidence at checkpoints.
+
+**Streamlit skills:** Dev 1 owns project-local installation/discovery during setup (`streamlit skills --yes` if missing and supported). Each developer must independently load applicable installed skills before implementing, reviewing, or testing Streamlit code, including during a UI handoff. Use the harness skill mechanism or read the relevant `SKILL.md`; report unavailable skills/CLI support rather than claiming usage. Skills installed in one checkout are not assumed to be available in another developer's environment.
 
 ## 2. Shared contract — agree in the first 15 minutes
 

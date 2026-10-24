@@ -14,12 +14,15 @@
 - The app should still handle local imports/budget arithmetic even if DNotifier is temporarily unavailable. Never fake a successful AI response or notification.
 - Use **synthetic sample data** and do not include any private financial data or credentials in git.
 - Build for a **single demo user**, PKR currency, and one standard CSV schema. Keep changes small; don't build a general fintech platform.
+- Before any Streamlit implementation/review/testing, load applicable installed Streamlit agent skills through the harness or read their `SKILL.md` instructions. Follow them within MVP scope; do not treat installation alone as usage. If unavailable, record the blocker and use official Streamlit docs.
 - Check off tasks here when implemented, with brief notes for any deviations or blockers.
 - For two developers, follow `PARALLEL_PLAN.md` ownership and checkpoints. Independent service tasks may run in parallel; keep the gates below as integration acceptance criteria.
 
 ## P0 — Foundation and integration gate (0:00–0:25)
 
 - [ ] Initialize Python project, `.gitignore`, `.env.example`, `requirements.txt`, `README.md`.
+- [ ] Create a Python 3.10 virtual environment (`python3.10 -m venv .venv`), confirm its interpreter version, and include `-c constraints.txt` in `requirements.txt`. Install all dependencies under Python 3.10, run `python -m pip check`, and smoke-test imports; document incompatibilities rather than upgrading the Python target.
+- [ ] After installing Streamlit, discover existing Streamlit agent skills; if missing and supported, install project-local skills with `streamlit skills --yes`. Load applicable skills before UI work and record which were used, or document CLI/skill availability blockers. See the [official skills CLI documentation](https://docs.streamlit.io/develop/api-reference/cli/skills).
 - [ ] Create `DNOTIFIER_APP_ID`, `DNOTIFIER_SECRET`, and demo identity variables; no hardcoded secrets.
 - [ ] Install the Python SDK and test real AI auth with `DNotifier(transport="http")`, `connect()`, `send_ai(...)`, `disconnect()`.
 - [ ] Inspect and document **actual AI response shape** in the adapter; check auth/AI availability via SDK where supported.
@@ -91,7 +94,7 @@
 
 ## P5 — QA, demonstration, handoff (3:30–4:00)
 
-- [ ] Run `pytest -q`, fix highest-impact failures, and verify startup from fresh DB.
+- [ ] Run `pytest -q` under Python 3.10, fix highest-impact failures, and verify startup from fresh DB.
 - [ ] Test with September and October synthetic CSV data.
 - [ ] Test receipt confirmation + duplicate matching + alert, then request an updated analysis.
 - [ ] Validate no secrets in source, logs, or Streamlit widgets.

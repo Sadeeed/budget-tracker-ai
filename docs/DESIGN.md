@@ -110,8 +110,10 @@ flowchart TB
 **Main design decision:** DNotifier interprets and communicates. Python/SQLite own financial facts and state. **Never ask the model to compute definitive financial totals.**
 
 ### Suggested stack
-- Python 3.11+.
+- **Python 3.10.x only**, declared by `.python-version` and `requires-python = ">=3.10,<3.11"` in `pyproject.toml`. Use the latest available 3.10 patch release locally; no Python 3.11-only syntax/APIs.
+- Apply root `constraints.txt` to installs and include `-c constraints.txt` in `requirements.txt`: baseline `streamlit==1.65.0`, `pandas==2.3.3`, `PyMuPDF==1.28.2`, `dnotifier==1.0.4`. These releases declare Python 3.10 support; Streamlit 1.65.0 includes the skills CLI. Newer releases of some packages require 3.11. Metadata/source checks are not proof of a successful full install: verify all dependencies and tests on Python 3.10 during P0/QA.
 - Streamlit (fast UI, minimal frontend effort).
+- Streamlit agent skills: after installing Streamlit, use `streamlit skills --yes` for project-local installation when supported. Before Streamlit implementation/review/testing, agents must load applicable installed skills via their harness or read the relevant `SKILL.md` instructions. Discover project skills under `.agents/skills/` / `.claude/skills/` or globally installed skills; installation alone is not usage. Record CLI/skill availability blockers and use official docs if unavailable. Skills do not expand MVP scope or override financial/privacy constraints.
 - `pandas` for CSV processing; `sqlite3` stdlib; `pydantic` for schemas; `decimal.Decimal` or integer minor units for money; `python-dateutil` optionally for date parsing.
 - `plotly` for a couple of category visualizations; plain Streamlit charts are adequate if time is short.
 - `PyMuPDF` (`fitz`) for digital PDF text extraction and rendering scanned pages; DNotifier for primary image processing. A local OCR engine (e.g. Tesseract via `pytesseract`) may be added only as an optional fallback; it is not required for the primary path.
@@ -536,6 +538,7 @@ Use `st.data_editor` for editable CSV/receipt data where appropriate. No need fo
 - DNotifier official docs: https://dnotifier.gitbook.io/product-docs
 - DNotifier Python SDK and public method examples: https://pypi.org/project/dnotifier/
 - Streamlit docs: https://docs.streamlit.io/
+- Streamlit agent skills CLI: https://docs.streamlit.io/develop/api-reference/cli/skills
 - PyMuPDF docs: https://pymupdf.readthedocs.io/
 - Optional local OCR fallback example (Tesseract): https://tesseract-ocr.github.io/tessdoc/Installation.html
 

@@ -1,0 +1,6 @@
+# Python 3.10-compatible baseline; use with pip install -c constraints.txt ...
+# Constraints restrict versions but do not install packages on their own.
+streamlit==1.65.0
+pandas==2.3.3
+PyMuPDF==1.28.2
+dnotifier==1.0.4
