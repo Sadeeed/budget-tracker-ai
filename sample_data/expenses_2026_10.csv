@@ -1,0 +1,16 @@
+date,description,amount,category,type
+2026-10-01,Apartment Rent,35000,Housing,expense
+2026-10-03,Metro Supermarket,13500,Groceries,expense
+2026-10-05,Shell Fuel Station,6200,Transport,expense
+2026-10-08,Barbeque Tonight Dinner,7500,Dining,expense
+2026-10-10,K-Electric Bill,9800,Utilities,expense
+2026-10-12,Food Delivery Feast,4200,Dining,expense
+2026-10-14,PTCL Internet,3000,Utilities,expense
+2026-10-16,Aga Khan Pharmacy,3100,Health,expense
+2026-10-18,Weekend Brunch,3500,Dining,expense
+2026-10-20,Metro Supermarket,10500,Groceries,expense
+2026-10-22,Netflix Subscription,1500,Subscriptions,expense
+2026-10-23,Cafe Gelato,2000,Dining,expense
+2026-10-24,Daraz Shopping Refund,2500,Shopping,refund
+2026-10-25,Transfer to Savings,20000,Other,transfer
+2026-10-28,Monthly Salary,180000,Income,income

@@ -1,0 +1,29 @@
+========================================
+         AL-FATAH DEPARTMENT STORE
+            Gulberg III, Lahore
+         NTN: 1428570-3 / POS-04
+========================================
+Receipt No: INV-2026-10-8842
+Date: 2026-10-26 18:45:12
+Cashier: Ahmed R.
+
+ITEM                           QTY    AMOUNT
+----------------------------------------
+Basmati Rice 5kg                 1   1,650.00
+Olive Oil 1L                     1   2,800.00
+Farm Fresh Milk 1L x 4           4   1,120.00
+Assorted Organic Spices          2     880.00
+Bakery Whole Wheat Bread         1     250.00
+----------------------------------------
+Subtotal:                           6,700.00
+General Sales Tax (18%):            1,206.00
+----------------------------------------
+TOTAL PAYABLE:                  PKR 7,906.00
+----------------------------------------
+Payment Method: VISA Card Ending 4412
+Approval Code: 084921
+Status: COMPLETED / PAID
+
+Thank you for shopping with Al-Fatah!
+Please retain this receipt for return/exchange.
+========================================

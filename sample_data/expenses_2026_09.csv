@@ -1,0 +1,13 @@
+date,description,amount,category,type
+2026-09-01,Apartment Rent,35000,Housing,expense
+2026-09-04,Metro Supermarket,12500,Groceries,expense
+2026-09-06,Shell Fuel Station,5500,Transport,expense
+2026-09-10,K-Electric Bill,9200,Utilities,expense
+2026-09-12,Cafe Bistro Dinner,3200,Dining,expense
+2026-09-15,PTCL Internet,3000,Utilities,expense
+2026-09-18,Fazal Din Pharmacy,2400,Health,expense
+2026-09-20,Food Delivery,2600,Dining,expense
+2026-09-22,Netflix Subscription,1500,Subscriptions,expense
+2026-09-25,Metro Supermarket,11000,Groceries,expense
+2026-09-28,Coffee Shop,1200,Dining,expense
+2026-09-30,Monthly Salary,180000,Income,income
