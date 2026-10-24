@@ -6,6 +6,7 @@
 > **Intended implementer:** OpenCode, Codex, or another coding agent  
 > **Last revised:** 2026-10-24  
 > **Companion:** [`TODO.md`](./TODO.md)
+> **Parallel build:** [`PARALLEL_PLAN.md`](./PARALLEL_PLAN.md) — two-developer ownership and integration schedule.
 
 ## 0. Implementation directive to coding agent
 

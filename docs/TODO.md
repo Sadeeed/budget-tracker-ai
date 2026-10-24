@@ -4,6 +4,7 @@
 > **Canonical specification:** [`DESIGN.md`](./DESIGN.md)  
 > **Primary demo:** CSV spending history → monthly budgets → AI analysis → invoice upload → alert.  
 > **Deliverable:** Executable Streamlit app, SQLite DB, sample data, tests, DNotifier AI + messaging demo.
+> **Two-developer execution:** [`PARALLEL_PLAN.md`](./PARALLEL_PLAN.md) — file ownership, shared contracts, and integration checkpoints.
 
 ## Instructions for OpenCode / Codex
 
@@ -14,6 +15,7 @@
 - Use **synthetic sample data** and do not include any private financial data or credentials in git.
 - Build for a **single demo user**, PKR currency, and one standard CSV schema. Keep changes small; don't build a general fintech platform.
 - Check off tasks here when implemented, with brief notes for any deviations or blockers.
+- For two developers, follow `PARALLEL_PLAN.md` ownership and checkpoints. Independent service tasks may run in parallel; keep the gates below as integration acceptance criteria.
 
 ## P0 — Foundation and integration gate (0:00–0:25)
 
