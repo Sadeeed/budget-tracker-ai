@@ -59,9 +59,15 @@ cap; CSV income is retained as history, not added. See the amendment in DESIGN.m
 - [x] Create prompt in `prompts.py` for grounded monthly budget analysis. *(Dev 2, integrated.)*
 - [x] Implement DNotifier AI adapter that submits **computed aggregate stats**, not the full CSV. *(Dev 2, integrated; real UI action verified headlessly.)*
 - [x] Validate analysis JSON with Pydantic; recover gracefully from invalid/non-JSON model outputs.
-- [x] Show max three significant findings, max three actionable recommendations, and limitations.
+- [x] Show significant findings, actionable recommendations, and limitations. User amendment: Insights allows one shared limit of 1–10 (default 3) applied separately to both findings and recommendations, enforced before saving; changes apply only on explicit analysis.
 - [x] Persist analysis and its stats snapshot. Mark report **outdated** when budget or transaction data changes.
 - [x] Test that the report never fabricates MoM comparison if history isn't present.
+
+Shared-limit amendment verification: Python 3.10.22, `.venv/bin/python -m pytest -q`
+passed **158 tests** (including prompt/limit validation for both lists and headless Streamlit
+selection of 6, save, display, and over-limit rejection). A real `.venv/bin/python ai_service.py --smoke-month`
+request passed before this change; configurable limits were verified offline with doubles,
+not claimed as a new live integration test. Loaded Streamlit session-state/testing skills.
 
 **Gate:** A user can import CSV → see charts → click **Analyze month** → see a **real DNotifier-generated** useful report.
 

@@ -40,6 +40,7 @@ from notifications import (
 from ai_service import AIService
 from dnotifier_adapter import DNotifierAdapter, DNotifierError, run_async
 from invoice_extract import process_invoice
+from prompts import DEFAULT_FINDINGS_LIMIT, MAX_FINDINGS_LIMIT
 
 
 def publish_alert(payload):
@@ -623,6 +624,14 @@ with tab_insights:
     if is_stale:
         st.warning("⚠️ **Report Outdated**: Financial data has changed since this report was generated.", icon="⚠️")
 
+    findings_limit = st.number_input(
+        "Maximum findings and recommendations",
+        min_value=1, max_value=MAX_FINDINGS_LIMIT, value=DEFAULT_FINDINGS_LIMIT,
+        step=1, key="analysis_findings_limit",
+        help="Applies separately to findings and recommendations in the next analysis. For example, 6 allows up to 6 of each. The AI may return fewer when evidence is limited.",
+    )
+    st.caption("Change the limit, then click Analyze to generate a new report. Saved reports are unchanged.")
+
     # Run Analysis Button
     col_btn, col_info = st.columns([1, 3])
     with col_btn:
@@ -636,7 +645,7 @@ with tab_insights:
             if config.is_dnotifier_configured():
                 try:
                     ai_svc = AIService(DNotifierAdapter.from_environment())
-                    analysis_result = run_async(ai_svc.analyze_month, stats_dict)
+                    analysis_result = run_async(ai_svc.analyze_month, stats_dict, findings_limit)
 
                     # Validate with Pydantic
                     validated_report = MonthlyAnalysisReport(**analysis_result)
@@ -669,7 +678,7 @@ with tab_insights:
 
         col_f, col_r = st.columns(2)
         with col_f:
-            st.markdown("#### 🔍 Evidence-Based Findings (Max 3)")
+            st.markdown(f"#### 🔍 Evidence-Based Findings ({len(report_data.get('findings', []))})")
             for f in report_data.get("findings", []):
                 sev_icon = "🔴" if f.get("severity") == "high" else "🟡" if f.get("severity") == "medium" else "🔵"
                 with st.container(border=True):
@@ -679,7 +688,7 @@ with tab_insights:
                         st.caption(f"Category: `{f.get('category')}`")
 
         with col_r:
-            st.markdown("#### 💡 Actionable Recommendations (Max 3)")
+            st.markdown(f"#### 💡 Actionable Recommendations ({len(report_data.get('recommendations', []))})")
             for r in report_data.get("recommendations", []):
                 with st.container(border=True):
                     st.markdown(f"**Action**: {r.get('action')}")

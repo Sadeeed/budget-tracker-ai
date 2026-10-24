@@ -12,7 +12,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from dnotifier_adapter import DNotifierAdapter, InvalidAIOutput
-from prompts import CATEGORIES, analysis_prompt, invoice_prompt
+from prompts import CATEGORIES, DEFAULT_FINDINGS_LIMIT, MAX_FINDINGS_LIMIT, analysis_prompt, invoice_prompt
 
 
 Category = Literal[
@@ -71,8 +71,8 @@ class Recommendation(Contract):
 
 class MonthlyReport(Contract):
     summary: str = Field(min_length=1, max_length=1200)
-    findings: list[Finding] = Field(max_length=3)
-    recommendations: list[Recommendation] = Field(max_length=3)
+    findings: list[Finding] = Field(max_length=MAX_FINDINGS_LIMIT)
+    recommendations: list[Recommendation] = Field(max_length=MAX_FINDINGS_LIMIT)
     limitations: list[str] = Field(max_length=10)
 
 
@@ -165,7 +165,9 @@ class AIService:
         draft["missing_fields"] = sorted(missing)
         return draft
 
-    async def analyze_month(self, computed_stats: dict) -> dict:
+    async def analyze_month(self, computed_stats: dict, findings_limit: int = DEFAULT_FINDINGS_LIMIT) -> dict:
+        if type(findings_limit) is not int or not 1 <= findings_limit <= MAX_FINDINGS_LIMIT:
+            raise InvalidAIOutput(f"Findings and recommendations limit must be an integer from 1 to {MAX_FINDINGS_LIMIT}.")
         try:
             stats = MonthlyStats.model_validate(computed_stats).model_dump()
         except ValidationError:
@@ -173,11 +175,13 @@ class AIService:
         for fact in stats["largest_expenses"]:
             fact["description"] = sanitize_text(fact["description"])
         stats["data_notes"] = [sanitize_text(note) for note in stats["data_notes"]]
-        result = await self.adapter.request_json(analysis_prompt(stats))
+        result = await self.adapter.request_json(analysis_prompt(stats, findings_limit))
         try:
             report = MonthlyReport.model_validate(result).model_dump()
         except ValidationError:
             raise InvalidAIOutput("Monthly AI output failed validation. Retry analysis; no report was saved.") from None
+        if any(len(report[field]) > findings_limit for field in ("findings", "recommendations")):
+            raise InvalidAIOutput("Monthly AI output exceeded the selected findings and recommendations limit. Retry analysis; no report was saved.")
         allowed_money = set()
 
         def collect_money(value):

@@ -200,3 +200,43 @@ def test_minor_units_mislabeled_as_rupees_are_rejected():
     output["findings"][0]["evidence"] = "Spent Rs 120000 against Rs 100000 budget."
     with pytest.raises(InvalidAIOutput, match="unsupported rupee amount"):
         asyncio.run(AIService(AdapterDouble(output)).analyze_month(statistics()))
+
+
+@pytest.mark.parametrize("limit", [1, 3, 6, 10])
+def test_selected_findings_limit_is_prompted_and_accepted(limit):
+    from models import MonthlyAnalysisReport
+
+    output = report()
+    output["findings"] *= limit
+    output["recommendations"] *= limit
+    adapter = AdapterDouble(output)
+    result = asyncio.run(AIService(adapter).analyze_month(statistics(), findings_limit=limit))
+    assert len(result["findings"]) == limit
+    assert len(MonthlyAnalysisReport(**result).findings) == limit
+    assert len(MonthlyAnalysisReport(**result).recommendations) == limit
+    assert f"findings (at most {limit} objects" in adapter.prompts[0]
+    assert f"recommendations (at most {limit} objects" in adapter.prompts[0]
+
+
+@pytest.mark.parametrize("limit", [1, 5, 10])
+@pytest.mark.parametrize("field", ["findings", "recommendations"])
+def test_output_cannot_exceed_selected_findings_limit(limit, field):
+    output = report()
+    output[field] *= limit + 1
+    with pytest.raises(InvalidAIOutput):
+        asyncio.run(AIService(AdapterDouble(output)).analyze_month(statistics(), limit))
+
+
+@pytest.mark.parametrize("limit", [0, -1, 11, True, 3.0, "5", None])
+def test_invalid_findings_limit_does_not_call_ai(limit):
+    adapter = AdapterDouble(report())
+    with pytest.raises(InvalidAIOutput, match="Findings and recommendations limit must be an integer"):
+        asyncio.run(AIService(adapter).analyze_month(statistics(), limit))
+    assert not adapter.prompts
+
+
+def test_selected_limit_does_not_require_filling_findings_or_recommendations():
+    output = report()
+    result = asyncio.run(AIService(AdapterDouble(output)).analyze_month(statistics(), 10))
+    assert len(result["findings"]) == 1
+    assert len(result["recommendations"]) == 1

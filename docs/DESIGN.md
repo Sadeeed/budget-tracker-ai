@@ -337,7 +337,7 @@ A receipt/invoice may lack an invoice number, or may include multiple amounts in
 }
 ```
 
-**Guardrails:** up to 3 findings and 3 prioritized recommendations, grounded only in input statistics. Prefer specific habits/actions to generic platitudes. If only one month exists, do not invent month-over-month changes. If no budget exists, don't call spending "over budget". Reports are informational budgeting guidance, not personalized regulated investment advice.
+**Guardrails (user-approved amendment):** one user-selectable limit of 1–10 (default 3) in Insights applies separately to findings and prioritized recommendations (e.g. 6 permits up to 6 of each). The selected limit applies to the next explicitly requested analysis, not existing reports. Return fewer findings or recommendations when evidence is insufficient. Both remain grounded only in input statistics. Prefer specific habits/actions to generic platitudes. If only one month exists, do not invent month-over-month changes. If no budget exists, don't call spending "over budget". Reports are informational budgeting guidance, not personalized regulated investment advice.
 
 ## 5. Financial rules (test these independently of AI)
 
@@ -473,7 +473,8 @@ ROLE: Practical, nonjudgmental personal budget analyst.
 Only use the supplied Python-computed aggregate financial facts.
 Do not recalculate or fabricate amounts, percentages, prior-month data, or causes.
 Separate what is observed from possible explanations; never infer why an expense happened.
-Return a JSON object with: summary, findings (max 3), recommendations (max 3), limitations.
+Return a JSON object with: summary, findings, recommendations, limitations.
+Apply the same user-selected maximum (1–10, default 3) separately to findings and recommendations.
 Every finding must cite actual input figures. Each recommendation should address a finding,
 be specific and feasible, and avoid guarantees or invented savings claims.
 If category budgets or history are absent, explicitly state that limitation.

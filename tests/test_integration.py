@@ -201,6 +201,46 @@ def test_ui_analysis_contract_origin_failure_and_staleness(db, monkeypatch):
     assert database.get_latest_report("2026-10")["id"] == report["id"]
 
 
+def test_ui_selected_findings_limit_is_used_only_on_explicit_analysis(db, monkeypatch):
+    at, adapter = ui(monkeypatch)
+    prompts = []
+
+    async def analysis_output(prompt):
+        prompts.append(prompt)
+        count = 6 if "findings (at most 6 objects" in prompt else 3
+        if count == 6:
+            assert "recommendations (at most 6 objects" in prompt
+        return dict(
+            summary="Review based on supplied facts.",
+            findings=[dict(title=f"Finding {i}", severity="low", evidence="Rs 0.00 spent.", category=None)
+                      for i in range(count)],
+            recommendations=[dict(action=f"Review spending {i}", reason="Based on supplied facts.",
+                                  priority="low", category=None) for i in range(count)],
+            limitations=[],
+        )
+
+    monkeypatch.setattr(adapter, "request_json", analysis_output)
+    at.run()
+    assert not at.exception
+    assert at.number_input(key="analysis_findings_limit").value == 3
+    at.number_input(key="analysis_findings_limit").set_value(6).run()
+    assert not at.exception and not prompts
+    click(at, "🚀 Analyze Month with DNotifier AI")
+    saved = database.get_latest_report("2026-10")
+    assert len(json.loads(saved["analysis_json"])["findings"]) == 6
+    assert len(json.loads(saved["analysis_json"])["recommendations"]) == 6
+    assert any("Evidence-Based Findings (6)" in m.value for m in at.markdown)
+    assert any("Actionable Recommendations (6)" in m.value for m in at.markdown)
+    at.number_input(key="analysis_findings_limit").set_value(1).run()
+    assert not at.exception and len(prompts) == 1
+    assert database.get_latest_report("2026-10")["id"] == saved["id"]
+    assert any("Evidence-Based Findings (6)" in m.value for m in at.markdown)
+    # This double returns 3, exceeding the newly selected limit of 1.
+    click(at, "🚀 Analyze Month with DNotifier AI")
+    assert at.error
+    assert database.get_latest_report("2026-10")["id"] == saved["id"]
+
+
 def test_ui_pdf_process_review_save_and_real_adapter_boundary_double(db, monkeypatch):
     import pymupdf
     with pymupdf.open() as document:

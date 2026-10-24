@@ -8,6 +8,7 @@ from enum import Enum
 from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 from config import OVERALL_BUDGET_KEY
+from prompts import MAX_FINDINGS_LIMIT
 
 
 class TransactionType(str, Enum):
@@ -155,8 +156,8 @@ class MonthlyAnalysisRecommendation(BaseModel):
 class MonthlyAnalysisReport(BaseModel):
     """Validated output structure produced by the DNotifier AI monthly analyst."""
     summary: str
-    findings: List[MonthlyAnalysisFinding] = Field(..., max_length=3)
-    recommendations: List[MonthlyAnalysisRecommendation] = Field(..., max_length=3)
+    findings: List[MonthlyAnalysisFinding] = Field(..., max_length=MAX_FINDINGS_LIMIT)
+    recommendations: List[MonthlyAnalysisRecommendation] = Field(..., max_length=MAX_FINDINGS_LIMIT)
     limitations: List[str] = Field(default_factory=list)
 
 
