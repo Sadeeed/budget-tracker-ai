@@ -34,10 +34,14 @@
 
 ## P1 — Money, schema, and CSV import (0:25–1:15)
 
+User amendment (2026-10-24): the sidebar monthly income is the overall spending
+cap; CSV income is retained as history, not added. See the amendment in DESIGN.md.
+
 - [x] Create `database.py` and tables from `DESIGN.md`; use transactions for batch imports.
 - [x] Use integer minor units for PKR amount storage and `Decimal` for parsing, never float.
 - [x] Define category enum and `expense/refund/income/transfer` semantics.
 - [x] Provide month selector, overall monthly budget, and per-category budget editor.
+- [x] Replace the overall-cap UI with sidebar monthly income; persist per month, reflect it in income/remaining KPIs and AI statistics without adding imported salary.
 - [x] Implement CSV upload with required `date,description,amount`; `category,type` optional.
 - [x] Validate dates, amounts, types, and categories; show editable rows with per-row errors.
 - [x] Confirm import only on explicit user action; persist `imports.file_sha256` and per-row provenance.
@@ -87,6 +91,7 @@
 - [x] Create `watch_alerts.py` WS subscriber that prints received alerts under the user identity. *(Real separate process verified.)*
 - [x] Persist status `pending/sent/failed`; allow failed sends to retry without duplicating thresholds.
 - [x] Display locally persisted alerts in the overview panel.
+- [x] Notify once per month when overall net spending strictly exceeds sidebar income (including zero); also check saving income below existing spend. Reuse durable alerts, real publisher and explicit retries.
 - [x] Demonstrate a newly added paid invoice crossing at least one threshold.
 - [x] Test that re-imports/re-renders don't resend old alerts.
 

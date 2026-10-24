@@ -43,9 +43,16 @@ without a budget snapshot are displayed but cannot safely be resent.
 - Exact-file imports are blocked. Potential cross-file duplicates require
   acknowledgement; legitimate repeated purchases are not silently deleted.
   Provenance, transactions and resulting pending alerts commit atomically.
-- Monthly category/overall budgets, spending, income, overrun and comparison
-  statistics. Budget inputs accept decimal PKR; blank removes a limit, zero is
-  an actual zero cap. Percent-used and threshold alerts require a positive limit.
+- Set **Monthly income (Rs)** directly in the sidebar and click **Save monthly
+  income**. This is the overall spending cap for the selected month. Existing
+  overall-cap settings retain their values as monthly income; imported salary
+  rows remain ledger history and are **not added** to this setting. Blank clears
+  it; zero is a real zero-income limit. Category budgets remain separate.
+- Spending, income remaining/overrun and month comparison statistics use Python
+  integer paisa. Category percentage alerts require a positive category limit.
+  When total net spending is **strictly greater** than monthly income, one overall
+  alert is queued for that month (including income zero). Exactly equal does not
+  alert. Saving income below existing spending also triggers this notification.
 - Explicit DNotifier monthly review: strict response validation, saved supporting
   statistics and AI provenance. Changes to budgets, current transactions or prior
   month transactions mark the report outdated. AI failure never saves a local
@@ -63,6 +70,8 @@ without a budget snapshot are displayed but cannot safely be resent.
   Retries use the original budget snapshot. `sent` is sender success, not a
   subscriber-delivery acknowledgement; ambiguous network failures may duplicate
   delivery if manually retried. The subscriber is a separate CLI process.
+  Overall income alerts use `category="__overall__"` / `threshold_percent=100` in
+  the same structured payload and retry lifecycle; they are not category alerts.
 
 ## Honest DNotifier status / limits
 
@@ -106,6 +115,11 @@ See [design](docs/DESIGN.md), [integration plan](docs/PARALLEL_PLAN.md),
    subscriber. Review again to refresh insights. A linked/unpaid receipt does not
    increase actuals. The PNG fixture needs manual entry, not verified image AI.
 
+For an overall-income demo instead, set sidebar monthly income to **300000** and
+import `sample_data/expenses_2026_10_over_300k.csv` in a fresh database. Its spending
+totals **Rs 320,000**, exceeding income by **Rs 20,000**; a real subscriber must be
+running to observe live delivery. This also works if income is saved after import.
+
 ## Verification commands
 
 ```bash
@@ -125,6 +139,6 @@ See [design](docs/DESIGN.md), [integration plan](docs/PARALLEL_PLAN.md),
 ```
 
 Verified on Python **3.10.22**: constrained dependency installation and `pip check`
-passed; **131 tests passed**. The integrated live demo exited 0. Streamlit skills
+passed; **139 tests passed**. The integrated live demo exited 0. Streamlit skills
 were installed and loaded: developing-with-streamlit with best-practices,
 session-state and testing references. A manual browser walkthrough remains open.

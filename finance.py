@@ -71,10 +71,9 @@ def calculate_monthly_stats(
     current_txs = database.get_transactions(month=month, db_path=db_path)
     budgets = database.get_budgets(month=month, db_path=db_path)
 
-    # 1. Total net expenses and income
+    # 1. Total net expenses. Imported income remains ledger data, not the user's cap.
     total_expenses = 0
     total_refunds = 0
-    total_income = 0
 
     for t in current_txs:
         tx_type = t["type"]
@@ -83,8 +82,6 @@ def calculate_monthly_stats(
             total_expenses += amount
         elif tx_type == TransactionType.REFUND.value:
             total_refunds += amount
-        elif tx_type == TransactionType.INCOME.value:
-            total_income += amount
         # Transfers are not counted in net expenses or income
 
     net_expenses = total_expenses - total_refunds
@@ -168,8 +165,11 @@ def calculate_monthly_stats(
 
     # 6. Data notes
     data_notes = [
-        f"Totals calculated deterministically in Python using integer minor units (1 {DEFAULT_CURRENCY} = 100 paisa)."
+        f"Totals calculated deterministically in Python using integer minor units (1 {DEFAULT_CURRENCY} = 100 paisa).",
+        "Monthly income is set in the sidebar and is the overall spending cap; CSV income is not added to it."
     ]
+    if overall_budget is None:
+        data_notes.append("Monthly income is not configured; income_minor=0 is a placeholder, not verified zero income.")
     if has_prior_month:
         data_notes.append(f"Comparison data available for previous month ({prior_month}).")
     else:
@@ -183,7 +183,7 @@ def calculate_monthly_stats(
         currency=DEFAULT_CURRENCY,
         overall_budget_minor=overall_budget,
         net_expenses_minor=net_expenses,
-        income_minor=total_income,
+        income_minor=overall_budget if overall_budget is not None else 0,
         overall_variance_minor=overall_variance,
         overall_percent_used=overall_percent_used,
         categories=category_stats_list,

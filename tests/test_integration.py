@@ -18,7 +18,7 @@ from csv_import import commit_csv_import, find_cross_file_duplicates, parse_and_
 from dnotifier_adapter import CapabilityUnavailable, DNotifierAdapter, InvalidAIOutput, validate_alert
 from finance import calculate_monthly_stats
 from money import parse_to_minor
-from notifications import dispatch_alert_sync, evaluate_threshold_crossings
+from notifications import build_alert_payload, dispatch_alert_sync, evaluate_threshold_crossings
 
 
 @pytest.fixture
@@ -304,3 +304,114 @@ def test_existing_schema_migration_retains_and_labels_reports(tmp_path):
     database.init_db(path)
     database.init_db(path)
     assert database.get_latest_report("2026-10", path)["origin"] == "legacy_unverified"
+
+
+def expense(amount, date="2026-10-12", tx_type="expense"):
+    return dict(occurred_on=date, description="Synthetic purchase", amount_minor=amount,
+                category="Shopping", type=tx_type, source="manual")
+
+
+def test_overall_income_cap_with_320k_fixture(db):
+    database.set_budget("2026-10", config.OVERALL_BUDGET_KEY, 30000000)
+    content = Path("sample_data/expenses_2026_10_over_300k.csv").read_bytes()
+    rows, errors = parse_and_validate_csv(content)
+    assert not errors
+    commit_csv_import("over-income.csv", content, rows)
+    stats = calculate_monthly_stats("2026-10")
+    assert stats.income_minor == stats.overall_budget_minor == 30000000
+    assert stats.net_expenses_minor == 32000000
+    assert stats.overall_variance_minor == 2000000
+    alerts = database.get_alerts()
+    assert len(alerts) == 1
+    assert alerts[0]["category"] == config.OVERALL_BUDGET_KEY
+    assert alerts[0]["threshold"] == 100 and alerts[0]["amount_minor"] == 31000000
+    validate_alert(build_alert_payload(alerts[0]))
+
+
+def test_income_alert_strictly_above_cap_and_not_repeated(db):
+    database.set_budget("2026-10", config.OVERALL_BUDGET_KEY, 30000000)
+    database.insert_transactions([expense(30000000)])
+    assert not database.get_alerts()  # Exactly at income is not above income.
+    database.insert_transactions([expense(100000, tx_type="income"), expense(500000, tx_type="transfer")])
+    assert not database.get_alerts()
+    database.insert_transactions([expense(100, tx_type="refund"), expense(100)])
+    assert not database.get_alerts()  # Refund restores room for this expense.
+    database.insert_transactions([expense(1)])
+    assert len(database.get_alerts()) == 1
+    database.insert_transactions([expense(200)])
+    database.set_budget("2026-10", config.OVERALL_BUDGET_KEY, 30000000)
+    assert len(database.get_alerts()) == 1
+
+
+@pytest.mark.parametrize("income, expected_alerts", [(None, 0), (0, 1)])
+def test_unset_and_zero_monthly_income_are_distinct(db, income, expected_alerts):
+    if income is not None:
+        database.set_budget("2026-10", config.OVERALL_BUDGET_KEY, income)
+    database.insert_transactions([expense(1)])
+    assert len(database.get_alerts()) == expected_alerts
+    assert calculate_monthly_stats("2026-10").overall_budget_minor == income
+
+
+def test_sidebar_income_overrides_imported_income_and_is_per_month(db):
+    import_sample("2026_10")
+    assert calculate_monthly_stats("2026-10").overall_budget_minor is None
+    assert calculate_monthly_stats("2026-10").income_minor == 0
+    revision = database.get_report_revision("2026-10")
+    database.set_budget("2026-10", config.OVERALL_BUDGET_KEY, 30000000)
+    assert calculate_monthly_stats("2026-10").income_minor == 30000000
+    assert calculate_monthly_stats("2026-09").overall_budget_minor is None
+    assert revision != database.get_report_revision("2026-10")
+    recorded = [t for t in database.get_transactions() if t["type"] == "income"]
+    assert len(recorded) == 1 and recorded[0]["amount_minor"] == 18000000
+
+
+def test_new_paid_invoice_crosses_overall_income_but_unpaid_link_does_not(db):
+    database.set_budget("2026-10", config.OVERALL_BUDGET_KEY, 100000)
+    database.insert_transactions([dict(expense(80000), merchant="Synthetic Market")])
+    database.commit_unpaid_invoice(**invoice())
+    assert not database.get_alerts()
+    linked = invoice()
+    linked.update(invoice_number="LINKED", total_minor=80000)
+    database.commit_paid_invoice_linked(**linked, linked_transaction_id=database.get_transactions()[0]["id"])
+    assert not database.get_alerts()
+    fresh = invoice()
+    fresh.update(invoice_number="NEW", total_minor=25000)
+    database.commit_paid_invoice_as_new_expense(**fresh)
+    assert len(database.get_alerts()) == 1
+    assert database.get_alerts()[0]["category"] == config.OVERALL_BUDGET_KEY
+    assert database.get_alerts()[0]["amount_minor"] == 105000
+
+
+def test_ui_income_save_after_import_sends_once_and_can_clear(db, monkeypatch):
+    content = Path("sample_data/expenses_2026_10_over_300k.csv").read_bytes()
+    rows, _ = parse_and_validate_csv(content)
+    commit_csv_import("over-income.csv", content, rows)
+    at, adapter = ui(monkeypatch)
+    at.run()
+    next(s for s in at.selectbox if s.label == "Target Month").set_value("2026-10").run()
+    next(t for t in at.text_input if t.label == "Monthly income (Rs)").set_value("300000")
+    click(at, "Save monthly income")
+    assert next(m for m in at.metric if m.label == "Monthly income").value == "Rs 300,000.00"
+    assert next(m for m in at.metric if m.label == "Spending above income").value == "+Rs 20,000.00"
+    assert len(adapter.sent) == 1 and adapter.sent[0]["category"] == config.OVERALL_BUDGET_KEY
+    at.run()
+    click(at, "Save monthly income")
+    assert len(adapter.sent) == 1
+    next(t for t in at.text_input if t.label == "Monthly income (Rs)").set_value("")
+    click(at, "Save monthly income")
+    assert calculate_monthly_stats("2026-10").overall_budget_minor is None
+
+
+def test_ui_income_before_csv_import_uses_overall_publisher(db, monkeypatch):
+    content = Path("sample_data/expenses_2026_10_over_300k.csv").read_bytes()
+    uploads = {"csv_file_uploader": SimpleNamespace(name="over-income.csv", getvalue=lambda: content)}
+    at, adapter = ui(monkeypatch, uploads)
+    at.run()
+    next(s for s in at.selectbox if s.label == "Target Month").set_value("2026-10").run()
+    next(t for t in at.text_input if t.label == "Monthly income (Rs)").set_value("300000")
+    click(at, "Save monthly income")
+    assert not adapter.sent
+    click(at, "Confirm and Commit Import")
+    assert len(adapter.sent) == 1
+    assert adapter.sent[0]["budget_minor"] == 30000000
+    assert database.get_alerts()[0]["status"] == "sent"

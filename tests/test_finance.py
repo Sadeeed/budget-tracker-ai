@@ -73,11 +73,13 @@ def test_net_expenses_with_refunds_and_transfers(temp_db):
         },
     ]
     database.insert_transactions(txs, db_path=temp_db)
+    # The sidebar setting is authoritative; imported salary must not be added to it.
+    database.set_budget("2026-10", "__overall__", 2000000, db_path=temp_db)
 
     stats = calculate_monthly_stats("2026-10", db_path=temp_db)
     # Net expenses: 1000 + 500 - 200 = 1300 (130,000 minor)
     assert stats.net_expenses_minor == 130000
-    assert stats.income_minor == 1000000
+    assert stats.income_minor == 2000000
 
     # Check Shopping category net: 1000 - 200 = 800 (80,000 minor)
     shopping_stat = next(c for c in stats.categories if c.category == "Shopping")

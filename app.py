@@ -97,28 +97,29 @@ selected_month = st.sidebar.selectbox(
     help="Select calendar month for tracking and budget analysis",
 )
 
-st.sidebar.markdown("### 🎯 Monthly Budgets")
+st.sidebar.markdown("### Monthly income")
 existing_budgets = database.get_budgets(selected_month)
 
-with st.sidebar.expander(f"Edit {selected_month} Budgets", expanded=False):
-    # Overall Cap
-    curr_overall = existing_budgets.get(config.OVERALL_BUDGET_KEY)
-    new_overall = st.text_input(
-        f"Overall Cap ({config.CURRENCY_SYMBOL})",
-        value=str(minor_to_decimal(curr_overall)) if curr_overall is not None else "",
-        help="Decimal PKR amount. Blank removes the cap; zero is a real zero limit.",
-        key=f"budget_overall_{selected_month}",
-    )
-    if st.button("Save Overall Cap", key="btn_save_overall"):
-        try:
-            if new_overall.strip():
-                database.set_budget(selected_month, config.OVERALL_BUDGET_KEY, parse_to_minor(new_overall))
-            else:
-                database.delete_budget(selected_month, config.OVERALL_BUDGET_KEY)
-            st.rerun()
-        except ValueError as exc:
-            st.error(str(exc))
+curr_overall = existing_budgets.get(config.OVERALL_BUDGET_KEY)
+new_overall = st.sidebar.text_input(
+    f"Monthly income ({config.CURRENCY_SYMBOL})",
+    value=str(minor_to_decimal(curr_overall)) if curr_overall is not None else "",
+    help="Your overall monthly spending limit. CSV income is not added. Blank clears it; zero is a real zero-income limit.",
+    key=f"budget_overall_{selected_month}",
+)
+if st.sidebar.button("Save monthly income", key="btn_save_overall"):
+    try:
+        previous_ids = {a["id"] for a in database.get_alerts()}
+        if new_overall.strip():
+            database.set_budget(selected_month, config.OVERALL_BUDGET_KEY, parse_to_minor(new_overall))
+        else:
+            database.delete_budget(selected_month, config.OVERALL_BUDGET_KEY)
+        dispatch_new_alerts(previous_ids)
+        st.rerun()
+    except ValueError as exc:
+        st.sidebar.error(str(exc))
 
+with st.sidebar.expander(f"Edit {selected_month} Budgets", expanded=False):
     st.markdown("#### Category Limits")
     budget_updates = {}
     for cat in config.STANDARD_EXPENSE_CATEGORIES:
@@ -198,20 +199,20 @@ with tab_overview:
             var_text = format_pkr(abs(variance))
             if variance > 0:
                 st.metric(
-                    label="Overall Budget Overrun",
+                    label="Spending above income",
                     value=f"+{var_text}",
                     delta=f"{stats.overall_percent_used}% used" if stats.overall_percent_used is not None else None,
                     delta_color="inverse",
                 )
             else:
                 st.metric(
-                    label="Overall Budget Remaining",
+                    label="Income remaining",
                     value=var_text,
                     delta=f"{stats.overall_percent_used}% used" if stats.overall_percent_used is not None else None,
                     delta_color="normal",
                 )
         else:
-            st.metric(label="Overall Budget", value="Not set", help="Configure in sidebar")
+            st.metric(label="Income remaining", value="Not set", help="Set monthly income in the sidebar")
 
     with col3:
         # Find top over-budget category
@@ -232,9 +233,9 @@ with tab_overview:
 
     with col4:
         st.metric(
-            label="Total Income",
-            value=format_pkr(stats.income_minor),
-            help="Income transactions tracked separately from spending",
+            label="Monthly income",
+            value=format_pkr(stats.income_minor) if stats.overall_budget_minor is not None else "Not set",
+            help="Set in the sidebar; also your overall spending limit. CSV income is not added.",
         )
 
     st.markdown("---")
@@ -308,7 +309,10 @@ with tab_overview:
             for a in alerts:
                 badge = "✅ Sent" if a["status"] == "sent" else "⏳ Pending" if a["status"] == "pending" else "⚠️ Failed"
                 st.info(
-                    f"**{a['category']} reached {a['threshold']}%** ({format_pkr(a['amount_minor'])}) — Status: **{badge}**"
+                    (f"**Spending exceeded monthly income**: {format_pkr(a['amount_minor'])} spent / "
+                     f"{format_pkr(a['budget_minor'])} income — Status: **{badge}**"
+                     if a["category"] == config.OVERALL_BUDGET_KEY and a["budget_minor"] is not None else
+                     f"**{a['category']} reached {a['threshold']}%** ({format_pkr(a['amount_minor'])}) — Status: **{badge}**")
                 )
                 if a["status"] != "sent":
                     if a["budget_minor"] is None:

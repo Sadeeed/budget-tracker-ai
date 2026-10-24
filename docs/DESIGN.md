@@ -8,6 +8,17 @@
 > **Companion:** [`TODO.md`](./TODO.md)
 > **Parallel build:** [`PARALLEL_PLAN.md`](./PARALLEL_PLAN.md) — two-developer ownership and integration schedule.
 
+> **User-approved amendment (2026-10-24):** Monthly income is set in the sidebar
+> and is the overall spending cap, reusing `budgets.category='__overall__'`.
+> Imported income rows remain ledger history; they do not increase this setting.
+> `income_minor` in computed statistics is the configured income (0 placeholder
+> with an explicit data note if unset), not the sum of imported salary rows.
+> A strictly-above-income overall alert uses category `__overall__`, threshold 100,
+> once per month. Equality is not an overrun; a configured zero income is valid.
+> Evaluate it atomically on new actual expenses and on saving income below already
+> recorded spending. Existing category 80%/100% rules remain unchanged. This
+> amendment supersedes the original optional-overall-cap/imported-income behavior.
+
 ## 0. Implementation directive to coding agent
 
 Build a **working local MVP**, not just an architecture skeleton. Implement tasks in `TODO.md` in priority order, run tests, and keep the application executable at each milestone. Make reasonable implementation decisions without stopping to ask about cosmetic details. Do not silently skip DNotifier: this is a DNotifier hackathon. Keep credentials out of source code and the client UI. When a DNotifier feature or method behaves differently from the documentation, verify it against the installed SDK, adapt behind an interface, and document the change.
@@ -19,7 +30,7 @@ Build a **working local MVP**, not just an architecture skeleton. Implement task
 ## 1. Constraints and boundaries
 
 ### Must be in MVP
-1. Monthly **category budgets** (with optional overall budget) and a month selector.
+1. Monthly **category budgets**, sidebar-set monthly income as overall spending cap, and a month selector.
 2. Import a documented, normalized transaction CSV and validate rows before saving.
 3. Persist budgets, transactions, invoices, analysis history, and notifications in SQLite.
 4. Compute deterministic spending totals, category variances, and month-over-month comparisons when historical data exists.
@@ -45,7 +56,7 @@ Build a **working local MVP**, not just an architecture skeleton. Implement task
 
 ### A. First use and budget configuration
 1. Open app; choose target month (default current local month) and currency (MVP fixed to PKR; display `Rs`).
-2. Configure category limits and optional overall monthly spending cap.
+2. Set monthly income in the sidebar (also the overall monthly spending cap) and configure category limits. CSV income is not added to this amount.
 3. Persist limits by calendar month. Previous months are not overwritten when editing current month.
 4. If no limits exist, allow importing and analysis but explain that overspending cannot be assessed yet.
 
@@ -80,6 +91,7 @@ Build a **working local MVP**, not just an architecture skeleton. Implement task
 4. Alert once per category/month/threshold; if a single transaction crosses both, both thresholds are eligible (can combine in UI but ensure no repeated send).
 5. Persist alert event locally, then send a DNotifier structured message to `budgetpilot-user-demo` through a connected sender (`budgetpilot-service`).
 6. The subscriber CLI receives and displays the real notification. Local dashboard can also show the persisted alerts (not a replacement for proving DNotifier delivery).
+7. Independently, if overall net spending moves from at/below monthly income to strictly above it, queue one `__overall__` / 100 alert for the month. Saving income below current spending also queues it, including income zero. No overall alert is created when income is unset. Persist the configured income as the event's budget snapshot; category rules are unchanged.
 
 ## 3. Architecture
 
@@ -259,7 +271,7 @@ CREATE TABLE IF NOT EXISTS alerts (
   "currency": "PKR",
   "overall_budget_minor": 10000000,
   "net_expenses_minor": 10500000,
-  "income_minor": 18000000,
+  "income_minor": 10000000,
   "overall_variance_minor": 500000,
   "categories": [
     {
@@ -329,7 +341,7 @@ A receipt/invoice may lack an invoice number, or may include multiple amounts in
 
 ## 5. Financial rules (test these independently of AI)
 
-1. **Expense actuals:** `sum(expense amounts) - sum(refund amounts)`, by month; refunds categorized against their original category when known (otherwise explicit `Other`). Income is separate. Transfers do not affect spending.
+1. **Expense actuals:** `sum(expense amounts) - sum(refund amounts)`, by month; refunds categorized against their original category when known (otherwise explicit `Other`). Imported income is separate ledger history; authoritative monthly income is the sidebar setting / overall cap, never added to imported income. Transfers do not affect spending.
 2. **Unpaid invoice:** appears in outstanding commitments only. It does **not** increase actual expense totals or trigger an actual-spend threshold alert.
 3. **Paid matched invoice:** link metadata to an existing transaction; zero change to actual total.
 4. **Paid unmatched invoice:** create exactly one new `expense` transaction; update totals and alerts.

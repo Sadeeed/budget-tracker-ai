@@ -259,7 +259,7 @@ def main() -> int:
     net_spent = sum(sum(amounts) for amounts in expenses.values())
     stats = {
         "month": "2026-10", "currency": "PKR", "overall_budget_minor": overall_budget,
-        "net_expenses_minor": net_spent, "income_minor": 300000,
+        "net_expenses_minor": net_spent, "income_minor": overall_budget,
         "overall_variance_minor": net_spent - overall_budget,
         "categories": categories, "largest_expenses": [],
         "data_notes": ["Synthetic service fixture, not imported CSV data.",

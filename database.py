@@ -7,7 +7,7 @@ import json
 import re
 import sqlite3
 from typing import Any, Dict, List, Optional, Tuple
-from config import DB_PATH, STANDARD_EXPENSE_CATEGORIES
+from config import DB_PATH, OVERALL_BUDGET_KEY, STANDARD_EXPENSE_CATEGORIES
 
 DDL_STATEMENTS = [
     """
@@ -116,6 +116,7 @@ def init_db(db_path: Optional[str] = None) -> None:
 def set_budget(month: str, category: str, limit_minor: int, db_path: Optional[str] = None) -> None:
     """Insert or update a budget limit for a month and category."""
     with get_connection(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             """
             INSERT INTO budgets (month, category, limit_minor)
@@ -124,6 +125,9 @@ def set_budget(month: str, category: str, limit_minor: int, db_path: Optional[st
             """,
             (month, category, limit_minor),
         )
+        if category == OVERALL_BUDGET_KEY:
+            # Income may be entered after importing spending. Notify if already over.
+            _queue_income_overrun(conn, month, limit_minor, _overall_total(conn, month))
         conn.commit()
 
 
@@ -193,6 +197,27 @@ def _category_total(conn, month, category):
     ).fetchone()[0]
 
 
+def _overall_total(conn, month):
+    return conn.execute(
+        """SELECT COALESCE(SUM(CASE type WHEN 'expense' THEN amount_minor
+           WHEN 'refund' THEN -amount_minor ELSE 0 END), 0) FROM transactions
+           WHERE substr(occurred_on, 1, 7) = ?""", (month,)
+    ).fetchone()[0]
+
+
+def _queue_income_overrun(conn, month, before, after):
+    """Overall alert is strictly above income, including a configured zero income."""
+    row = conn.execute("SELECT limit_minor FROM budgets WHERE month = ? AND category = ?",
+                       (month, OVERALL_BUDGET_KEY)).fetchone()
+    if row is not None and before <= row[0] < after:
+        conn.execute(
+            """INSERT INTO alerts(month, category, threshold, amount_minor, status,
+               created_at, budget_minor) VALUES (?, ?, 100, ?, 'pending', ?, ?)
+               ON CONFLICT(month, category, threshold) DO NOTHING""",
+            (month, OVERALL_BUDGET_KEY, after, utc_now_iso(), row[0]),
+        )
+
+
 def _queue_crossings(conn, month, category, before, after):
     """Queue in the same write transaction as the expense; no SDK calls here."""
     row = conn.execute("SELECT limit_minor FROM budgets WHERE month = ? AND category = ?",
@@ -215,6 +240,7 @@ def _insert_transactions(conn, rows):
     for r in rows:
         month, category = r["occurred_on"][:7], r["category"]
         before = _category_total(conn, month, category)
+        overall_before = _overall_total(conn, month)
         cursor = conn.execute(
             """INSERT INTO transactions(occurred_on, description, merchant, amount_minor,
                category, type, source, import_id, source_row, invoice_id, created_at)
@@ -226,6 +252,7 @@ def _insert_transactions(conn, rows):
         ids.append(cursor.lastrowid)
         if r["type"] == "expense":
             _queue_crossings(conn, month, category, before, before + r["amount_minor"])
+            _queue_income_overrun(conn, month, overall_before, overall_before + r["amount_minor"])
     return ids
 
 def insert_transactions(
@@ -294,7 +321,7 @@ def get_transaction_revision(month: str, db_path: Optional[str] = None) -> int:
 def get_report_revision(month: str, db_path: Optional[str] = None) -> int:
     """Fingerprint all report facts, including comparison-month data and budget edits."""
     from finance import get_prior_month_str
-    facts = [get_transactions(month, db_path),
+    facts = ["sidebar-income-v1", get_transactions(month, db_path),
              get_transactions(get_prior_month_str(month), db_path), get_budgets(month, db_path)]
     return int(hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()[:15], 16)
 
@@ -440,6 +467,7 @@ def commit_paid_invoice_as_new_expense(
         conn.execute("BEGIN IMMEDIATE")
         _validate_invoice(conn, merchant, invoice_date, total_minor, category, invoice_number, file_sha256)
         before = _category_total(conn, invoice_date[:7], category)
+        overall_before = _overall_total(conn, invoice_date[:7])
         # 1. Insert invoice
         inv_cursor = conn.execute(
             """
@@ -473,6 +501,7 @@ def commit_paid_invoice_as_new_expense(
             (transaction_id, invoice_id),
         )
         _queue_crossings(conn, invoice_date[:7], category, before, before + total_minor)
+        _queue_income_overrun(conn, invoice_date[:7], overall_before, overall_before + total_minor)
         conn.commit()
         return invoice_id, transaction_id
 

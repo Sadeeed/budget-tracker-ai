@@ -36,6 +36,7 @@ def main():
     import streamlit as st
     from streamlit.testing.v1 import AppTest
     from finance import calculate_monthly_stats
+    from money import minor_to_decimal
     from notifications import build_alert_payload
 
     uploads = {}
@@ -59,13 +60,13 @@ def main():
                 assert len(database.get_transactions(f"2026-{month}")) == (12 if month == "09" else 15), "CSV import failed."
             uploads.pop("csv_file_uploader")
             before = calculate_monthly_stats("2026-10").net_expenses_minor
-            groceries = next(c.spent_minor for c in calculate_monthly_stats("2026-10").categories if c.category == "Groceries")
-            database.set_budget("2026-10", "Groceries", groceries + 42500)
             database.set_budget("2026-10", "Dining", 1000000)
             at.run()
             stage = "monthly AI review"
             # Explicitly select the synthetic fixture month, not the machine's current month.
             next(s for s in at.selectbox if s.label == "Target Month").set_value("2026-10").run()
+            next(t for t in at.text_input if t.label == "Monthly income (Rs)").set_value(str(minor_to_decimal(before + 42500)))
+            click(at, "Save monthly income")
             click(at, "🚀 Analyze Month with DNotifier AI")
             report = database.get_latest_report("2026-10")
             assert report and report["origin"] == "dnotifier", "Live monthly analysis did not save a validated report."
@@ -103,6 +104,7 @@ def main():
             assert report["transaction_revision"] != database.get_report_revision("2026-10")
             alerts = database.get_alerts()
             assert len(alerts) == 1 and alerts[0]["status"] == "sent", "Durable expense alert was not sent."
+            assert alerts[0]["category"] == "__overall__", "Expected an overall monthly-income overrun alert."
             output, _ = subscriber.communicate(timeout=85)
             stage = "subscriber delivery verification"
             received = [json.loads(line) for line in output.splitlines() if line]
@@ -119,6 +121,7 @@ def main():
                           "file_chooser_injected_only": True, "real_ai_requests": 3,
                           "two_csvs_imported": True, "paid_invoice_delta_minor": 85000,
                           "separate_subscriber_received": True, "updated_report_current": True,
+                          "overall_income_overrun_alert": True,
                           "image_support": "blocked/unverified", "database": os.environ["BUDGETPILOT_DB_PATH"]}))
         return 0
     except Exception as exc:

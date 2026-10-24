@@ -1,5 +1,36 @@
 # DNotifier integration status
 
+## Sidebar income / overall alert amendment (2026-10-24 — current)
+
+User requested monthly income in the sidebar, using it as the overall spending
+cap rather than summing imported income. Existing `__overall__` values are reused
+without destructive migration. CSV income rows remain in the ledger and are not
+added to the setting. Dashboard and AI statistics use the configured income.
+Unset income is explicitly distinguished from a configured zero income.
+
+New expenses atomically queue one overall `__overall__` / 100 alert per month
+when net spending becomes **strictly greater** than income; equality does not
+notify. Saving income below already recorded spend also queues it. Original
+category 80%/100% behavior, durable status, budget snapshots and retries remain.
+
+Verification under Python **3.10.22**:
+
+- `.venv/bin/python -m pytest -q`: **139 passed**, including the Rs 320,000 sample
+  against Rs 300,000 income, equality/zero/unset boundaries, CSV salary exclusion,
+  month isolation, paid/unpaid/linked invoices and both sidebar/import UI paths.
+- `.venv/bin/python -m pip check`: passed.
+- `git diff --check`: passed.
+- `.venv/bin/python scripts/smoke_demo.py --live`: **exit 0**. Real headless UI
+  monthly-income save → two imported-month statistics → real monthly review →
+  real digital-PDF draft → explicit paid confirmation → **overall-income** alert
+  received by a separate SDK subscriber → refreshed report. Three real AI calls;
+  only the file chooser was injected. Fresh synthetic DB:
+  `/tmp/opencode/budgetpilot-demo-6o1194fm/demo.db`.
+
+No new image capability is claimed; manual/browser usability acceptance remains
+open. Normal run commands remain `.venv/bin/streamlit run app.py` and, separately,
+`.venv/bin/python watch_alerts.py`. Earlier evidence below is retained as history.
+
 ## Integrated Dev 1 + Dev 2 verification (2026-10-24 — current)
 
 This section supersedes historical statements below that UI wiring is unfinished.
