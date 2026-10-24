@@ -6,11 +6,11 @@ grounded AI budget analysis, and real-time threshold notifications.
 """
 
 import json
+import hashlib
+import io
 from datetime import datetime
-from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import List
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -21,6 +21,8 @@ from csv_import import (
     check_csv_import_status,
     commit_csv_import,
     CSVValidationError,
+    find_cross_file_duplicates,
+    validate_iso_date,
 )
 from finance import (
     calculate_monthly_stats,
@@ -29,27 +31,25 @@ from finance import (
 from money import format_pkr, minor_to_decimal, parse_to_minor
 from models import (
     MonthlyAnalysisReport,
-    PaymentStatus,
-    ProcessingPath,
-    TransactionSource,
     TransactionType,
 )
 from notifications import (
-    build_alert_payload,
     dispatch_alert_sync,
-    evaluate_threshold_crossings,
 )
 
-# Optional Dev 2 hooks
-try:
-    from ai_service import AIService
-except ImportError:
-    AIService = None
+from ai_service import AIService
+from dnotifier_adapter import DNotifierAdapter, DNotifierError, run_async
+from invoice_extract import process_invoice
 
-try:
-    from dnotifier_adapter import publish_alert
-except ImportError:
-    publish_alert = None
+
+def publish_alert(payload):
+    return DNotifierAdapter.from_environment().publish_alert(payload)
+
+
+def dispatch_new_alerts(previous_ids):
+    for alert in database.get_alerts():
+        if alert["id"] not in previous_ids:
+            dispatch_alert_sync(alert, publish_alert)
 
 
 # --- Page Configuration ---
@@ -80,7 +80,7 @@ st.sidebar.caption("Deterministic Money. Evidence-Based Insights.")
 
 # DNotifier Status Badge
 if config.is_dnotifier_configured():
-    st.sidebar.success("● DNotifier Connected", icon="🔌")
+    st.sidebar.info("DNotifier configured — connection checked on request", icon="🔌")
 else:
     st.sidebar.info("○ DNotifier Unconfigured (Local Mode)", icon="ℹ️")
 
@@ -88,9 +88,7 @@ st.sidebar.markdown("---")
 
 # Month Selector
 available_months = get_available_months()
-default_month_idx = 0
-if "2026-10" in available_months:
-    default_month_idx = available_months.index("2026-10")
+default_month_idx = available_months.index(datetime.now().strftime("%Y-%m"))
 
 selected_month = st.sidebar.selectbox(
     "Target Month",
@@ -104,38 +102,45 @@ existing_budgets = database.get_budgets(selected_month)
 
 with st.sidebar.expander(f"Edit {selected_month} Budgets", expanded=False):
     # Overall Cap
-    curr_overall = existing_budgets.get(config.OVERALL_BUDGET_KEY, 0)
-    new_overall = st.number_input(
+    curr_overall = existing_budgets.get(config.OVERALL_BUDGET_KEY)
+    new_overall = st.text_input(
         f"Overall Cap ({config.CURRENCY_SYMBOL})",
-        min_value=0,
-        value=int(curr_overall / 100),
-        step=5000,
+        value=str(minor_to_decimal(curr_overall)) if curr_overall is not None else "",
+        help="Decimal PKR amount. Blank removes the cap; zero is a real zero limit.",
         key=f"budget_overall_{selected_month}",
     )
     if st.button("Save Overall Cap", key="btn_save_overall"):
-        database.set_budget(selected_month, config.OVERALL_BUDGET_KEY, new_overall * 100)
-        st.success("Overall cap saved!")
-        st.rerun()
+        try:
+            if new_overall.strip():
+                database.set_budget(selected_month, config.OVERALL_BUDGET_KEY, parse_to_minor(new_overall))
+            else:
+                database.delete_budget(selected_month, config.OVERALL_BUDGET_KEY)
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
 
     st.markdown("#### Category Limits")
     budget_updates = {}
     for cat in config.STANDARD_EXPENSE_CATEGORIES:
-        curr_val = existing_budgets.get(cat, 0)
-        val = st.number_input(
+        curr_val = existing_budgets.get(cat)
+        val = st.text_input(
             f"{cat} ({config.CURRENCY_SYMBOL})",
-            min_value=0,
-            value=int(curr_val / 100),
-            step=1000,
+            value=str(minor_to_decimal(curr_val)) if curr_val is not None else "",
             key=f"budget_{cat}_{selected_month}",
         )
         budget_updates[cat] = val
 
     if st.button("Save Category Budgets", key="btn_save_categories"):
-        for cat, val in budget_updates.items():
-            if val > 0:
-                database.set_budget(selected_month, cat, val * 100)
-        st.success("Category budgets updated!")
-        st.rerun()
+        try:
+            parsed = {cat: parse_to_minor(val) if val.strip() else None for cat, val in budget_updates.items()}
+            for cat, value in parsed.items():
+                if value is None:
+                    database.delete_budget(selected_month, cat)
+                else:
+                    database.set_budget(selected_month, cat, value)
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
 
 st.sidebar.markdown("---")
 st.sidebar.caption(f"Currency: **PKR** (Minor unit: 1 Rs = 100 paisa)")
@@ -161,19 +166,21 @@ tab_overview, tab_import, tab_invoices, tab_insights = st.tabs([
 with tab_overview:
     stats = calculate_monthly_stats(selected_month)
     latest_report = database.get_latest_report(selected_month)
-    current_revision = database.get_transaction_revision(selected_month)
+    current_revision = database.get_report_revision(selected_month)
 
     # Report staleness banner
     if latest_report:
         is_stale = latest_report["transaction_revision"] != current_revision
         if is_stale:
             st.warning(
-                "⚠️ **Report Outdated**: New financial data or invoices have been added since the last AI review. "
+                "⚠️ **Report Outdated**: Transactions, budgets, or comparison-month data changed since the last AI review. "
                 "Visit the 'Monthly AI Insights' tab to re-run your grounded analysis.",
                 icon="⚠️",
             )
-        else:
+        elif latest_report["origin"] == "dnotifier":
             st.success("✅ **Report Current**: Latest AI insights reflect all current transactions.", icon="✨")
+        if latest_report["origin"] != "dnotifier":
+            st.warning("Legacy report: AI origin is unverified. Run a new DNotifier review.")
 
     # Top KPI Metrics
     col1, col2, col3, col4 = st.columns(4)
@@ -186,21 +193,21 @@ with tab_overview:
         )
 
     with col2:
-        if stats.overall_budget_minor:
+        if stats.overall_budget_minor is not None:
             variance = stats.overall_variance_minor
             var_text = format_pkr(abs(variance))
             if variance > 0:
                 st.metric(
                     label="Overall Budget Overrun",
                     value=f"+{var_text}",
-                    delta=f"{stats.overall_percent_used}% used",
+                    delta=f"{stats.overall_percent_used}% used" if stats.overall_percent_used is not None else None,
                     delta_color="inverse",
                 )
             else:
                 st.metric(
                     label="Overall Budget Remaining",
                     value=var_text,
-                    delta=f"{stats.overall_percent_used}% used",
+                    delta=f"{stats.overall_percent_used}% used" if stats.overall_percent_used is not None else None,
                     delta_color="normal",
                 )
         else:
@@ -221,7 +228,7 @@ with tab_overview:
                 delta_color="inverse",
             )
         else:
-            st.metric(label="Budget Health", value="All in budget", delta="100% on track")
+            st.metric(label="Budget Health", value="No configured overrun" if existing_budgets else "Budgets not set")
 
     with col4:
         st.metric(
@@ -275,7 +282,7 @@ with tab_overview:
         st.subheader("Category Budget Progress")
         for c in stats.categories:
             if c.budget_minor and c.budget_minor > 0:
-                pct = min(1.0, float(c.spent_minor / c.budget_minor))
+                pct = max(0.0, min(1.0, float(c.spent_minor / c.budget_minor)))
                 raw_pct = c.percent_used or 0.0
                 status_icon = "🟢"
                 if raw_pct >= 100.0:
@@ -303,6 +310,13 @@ with tab_overview:
                 st.info(
                     f"**{a['category']} reached {a['threshold']}%** ({format_pkr(a['amount_minor'])}) — Status: **{badge}**"
                 )
+                if a["status"] != "sent":
+                    if a["budget_minor"] is None:
+                        st.caption("Legacy event has no original budget snapshot; cannot safely resend.")
+                    elif st.button("Retry alert", key=f"retry_alert_{a['id']}"):
+                        dispatch_alert_sync(a, publish_alert)
+                        st.rerun()
+            st.caption("Sent means accepted by the sender, not confirmed subscriber delivery. Run watch_alerts.py separately.")
         else:
             st.write("No budget threshold alerts triggered for this month.")
 
@@ -357,67 +371,50 @@ with tab_import:
             )
         else:
             try:
-                valid_rows, errors = parse_and_validate_csv(file_bytes)
-
-                if errors:
-                    st.warning(f"⚠️ {len(errors)} row(s) had validation errors and will be excluded:", icon="⚠️")
-                    for err in errors:
-                        st.write(f"- Row {err['source_row']}: {err['error_message']}")
-
-                if valid_rows:
-                    st.success(f"Validated {len(valid_rows)} transaction row(s). Preview below before confirming import.")
-
-                    # Editable preview table
-                    df_preview = pd.DataFrame([
-                        {
-                            "Date": r["occurred_on"],
-                            "Description": r["description"],
-                            "Amount (PKR)": float(minor_to_decimal(r["amount_minor"])),
-                            "Category": r["category"],
-                            "Type": r["type"],
-                        }
-                        for r in valid_rows
-                    ])
-
-                    edited_df = st.data_editor(
-                        df_preview,
-                        column_config={
-                            "Category": st.column_config.SelectboxColumn(
-                                "Category",
-                                options=config.ALL_CATEGORIES,
-                                required=True,
-                            ),
-                            "Type": st.column_config.SelectboxColumn(
-                                "Type",
-                                options=[t.value for t in TransactionType],
-                                required=True,
-                            ),
-                        },
-                        hide_index=True,
-                        key="csv_preview_editor",
-                    )
-
-                    if st.button("Confirm and Commit Import", type="primary", key="btn_commit_csv"):
-                        # Re-apply any edits made in the data editor
-                        approved_rows = []
-                        for idx, row in edited_df.iterrows():
-                            orig = valid_rows[idx]
-                            approved_rows.append({
-                                "source_row": orig["source_row"],
-                                "occurred_on": str(row["Date"]),
-                                "description": str(row["Description"]),
-                                "merchant": str(row["Description"]),
-                                "amount_minor": parse_to_minor(row["Amount (PKR)"]),
-                                "category": str(row["Category"]),
-                                "type": str(row["Type"]),
-                                "source": TransactionSource.CSV.value,
-                            })
-
-                        import_id, inserted_ids = commit_csv_import(filename, file_bytes, approved_rows)
-                        st.success(f"🎉 Successfully imported {len(inserted_ids)} transactions (Import ID #{import_id})!")
+                # Keep invalid rows editable, and keep money as decimal strings.
+                parse_and_validate_csv(file_bytes)  # Structural validation first.
+                df_preview = pd.read_csv(io.BytesIO(file_bytes), dtype=str, keep_default_na=False,
+                                         encoding="utf-8-sig")
+                df_preview.columns = [c.strip().lower() for c in df_preview.columns]
+                for column, default in (("category", ""), ("type", "expense")):
+                    if column not in df_preview:
+                        df_preview[column] = default
+                df_preview.insert(0, "Include", True)
+                edited_df = st.data_editor(
+                    df_preview,
+                    column_config={
+                        "category": st.column_config.SelectboxColumn("Category", options=config.ALL_CATEGORIES),
+                        "type": st.column_config.SelectboxColumn("Type", options=[t.value for t in TransactionType]),
+                    },
+                    hide_index=True,
+                    alt="Editable CSV rows; uncheck Include to exclude a row",
+                    key=f"csv_preview_{import_status['file_sha256']}",
+                )
+                selected = edited_df[edited_df["Include"]].drop(columns="Include")
+                approved_rows, errors = parse_and_validate_csv(selected.to_csv(index=False).encode())
+                for record, original_idx in zip(approved_rows, selected.index):
+                    # Only used for a fully valid selection below.
+                    record["source_row"] = int(original_idx) + 1
+                for err in errors:
+                    st.error(f"Selected row {err['source_row']}: {err['error_message']} — edit or exclude it.")
+                possible_duplicates = find_cross_file_duplicates(approved_rows)
+                duplicates_approved = False
+                if possible_duplicates:
+                    st.warning(f"Possible cross-file duplicates at source rows {possible_duplicates}. No rows are silently dropped.")
+                    duplicates_approved = st.checkbox("I reviewed these possible duplicates and want to include them",
+                                                       key=f"csv_duplicates_{import_status['file_sha256']}")
+                if st.button("Confirm and Commit Import", type="primary", key="btn_commit_csv"):
+                    if errors or not approved_rows:
+                        st.error("Correct or exclude invalid rows before importing at least one row.")
+                    elif possible_duplicates and not duplicates_approved:
+                        st.error("Review and acknowledge potential duplicates before importing.")
+                    else:
+                        previous_ids = {a["id"] for a in database.get_alerts()}
+                        commit_csv_import(filename, file_bytes, approved_rows)
+                        dispatch_new_alerts(previous_ids)
                         st.rerun()
 
-            except CSVValidationError as e:
+            except (CSVValidationError, ValueError, UnicodeError) as e:
                 st.error(f"CSV Format Error: {e}", icon="🚨")
 
 
@@ -434,41 +431,42 @@ with tab_invoices:
         "Upload Invoice / Receipt",
         type=["pdf", "png", "jpg", "jpeg"],
         key="invoice_uploader",
+        max_upload_size=10,
     )
 
-    # Initialize review session state
-    if "invoice_draft" not in st.session_state:
-        st.session_state.invoice_draft = {
-            "merchant": "Al-Fatah Department Store",
-            "invoice_number": "INV-2026-10-8842",
-            "date": "2026-10-26",
-            "total": "7906.00",
-            "category": "Groceries",
-            "payment_status": "paid",
-            "processing_path": "digital_text",
-        }
+    doc_bytes = uploaded_doc.getvalue() if uploaded_doc else None
+    doc_hash = hashlib.sha256(doc_bytes).hexdigest() if doc_bytes is not None else None
+    if "invoice_draft" not in st.session_state or st.session_state.get("invoice_file_hash") != doc_hash:
+        st.session_state.invoice_draft = {"processing_path": "manual"}
+        st.session_state.invoice_file_hash = doc_hash
+        st.session_state.invoice_version = st.session_state.get("invoice_version", 0) + 1
+        st.session_state.pop("confirmed_invoice_data", None)
 
-    if uploaded_doc:
-        doc_bytes = uploaded_doc.getvalue()
-        doc_name = uploaded_doc.name
-        is_pdf = doc_name.lower().endswith(".pdf")
-
-        # Extraction logic
-        if is_pdf:
+    if uploaded_doc and st.button("Process receipt with DNotifier", key="process_invoice"):
+        st.session_state.pop("confirmed_invoice_data", None)
+        with st.spinner("Interpreting receipt; review is required before any save..."):
             try:
-                import pymupdf
-                pdf_doc = pymupdf.open(stream=doc_bytes, filetype="pdf")
-                extracted_text = ""
-                for page in pdf_doc:
-                    extracted_text += page.get_text()
-                pdf_doc.close()
+                extension = uploaded_doc.name.lower().rsplit(".", 1)[-1]
+                mime = {"pdf": "application/pdf", "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(extension, "application/octet-stream")
+                result = run_async(process_invoice, doc_bytes, mime,
+                                   AIService(DNotifierAdapter.from_environment()))
+                st.session_state.invoice_draft = dict(result.draft or {},
+                    processing_path=result.processing_path, failure=result.failure,
+                    attempted_path=result.attempted_path)
+            except DNotifierError as exc:
+                st.session_state.invoice_draft = {"processing_path": "manual", "failure": str(exc)}
+        st.session_state.invoice_version += 1
 
-                if extracted_text.strip():
-                    st.session_state.invoice_draft["processing_path"] = "digital_text"
-                    st.info("Extracted digital text via PyMuPDF.")
-            except Exception as e:
-                st.session_state.invoice_draft["processing_path"] = "manual"
-                st.warning(f"Digital text extraction fallback to manual review: {e}")
+    draft = st.session_state.invoice_draft
+    if draft.get("failure"):
+        st.warning(draft["failure"])
+    if draft.get("attempted_path"):
+        st.caption(f"Attempted path: {draft['attempted_path']}")
+    if draft.get("missing_fields"):
+        st.warning("Missing fields: " + ", ".join(draft["missing_fields"]))
+    if draft.get("evidence_snippet"):
+        st.text(draft["evidence_snippet"])
+    st.caption("Images/scans currently require manual entry: DNotifier image support is unverified. No local OCR is installed.")
 
     # Processing path indicator badge
     path_badge = st.session_state.invoice_draft.get("processing_path", "manual")
@@ -476,19 +474,21 @@ with tab_invoices:
 
     # Editable Review Form
     st.markdown("### 📝 Review & Confirm Invoice")
-    with st.form("invoice_review_form"):
+    with st.form(f"invoice_review_form_{st.session_state.invoice_version}"):
         col_m1, col_m2 = st.columns(2)
         with col_m1:
-            inv_merchant = st.text_input("Merchant", value=st.session_state.invoice_draft.get("merchant", ""))
-            inv_number = st.text_input("Invoice / Receipt Number", value=st.session_state.invoice_draft.get("invoice_number", ""))
-            inv_date = st.text_input("Date (YYYY-MM-DD)", value=st.session_state.invoice_draft.get("date", selected_month + "-15"))
+            inv_merchant = st.text_input("Merchant", value=draft.get("merchant") or "", key=f"merchant_{st.session_state.invoice_version}")
+            inv_number = st.text_input("Invoice / Receipt Number", value=draft.get("invoice_number") or "", key=f"number_{st.session_state.invoice_version}")
+            inv_date = st.text_input("Date (YYYY-MM-DD)", value=draft.get("date") or "", key=f"date_{st.session_state.invoice_version}")
 
         with col_m2:
-            inv_total_str = st.text_input("Total Amount (PKR)", value=st.session_state.invoice_draft.get("total", "0.00"))
+            inv_total_str = st.text_input("Total Amount (PKR)", value=draft.get("total") or "", key=f"total_{st.session_state.invoice_version}")
+            inv_currency = st.text_input("Currency (PKR only)", value=draft.get("currency") or ("" if "currency" in draft else "PKR"), key=f"currency_{st.session_state.invoice_version}")
             inv_category = st.selectbox(
                 "Category",
                 options=config.STANDARD_EXPENSE_CATEGORIES,
-                index=config.STANDARD_EXPENSE_CATEGORIES.index(st.session_state.invoice_draft.get("category", "Groceries")),
+                index=config.STANDARD_EXPENSE_CATEGORIES.index(draft.get("suggested_category") or "Other"),
+                key=f"category_{st.session_state.invoice_version}",
             )
             inv_status = st.radio(
                 "Payment Status",
@@ -500,8 +500,14 @@ with tab_invoices:
         submit_review = st.form_submit_button("Proceed to Match & Save", type="primary")
 
     if submit_review:
+        st.session_state.pop("confirmed_invoice_data", None)
         try:
             total_minor = parse_to_minor(inv_total_str)
+            validate_iso_date(inv_date)
+            if not inv_merchant.strip() or inv_currency != "PKR":
+                raise ValueError("Enter a merchant and confirm PKR currency; currency conversion is not supported.")
+            if inv_status not in ("paid", "unpaid") or inv_category not in config.STANDARD_EXPENSE_CATEGORIES:
+                raise ValueError("Choose a valid payment status and expense category.")
             st.session_state.confirmed_invoice_data = {
                 "merchant": inv_merchant.strip(),
                 "invoice_number": inv_number.strip() if inv_number else None,
@@ -509,20 +515,23 @@ with tab_invoices:
                 "total_minor": total_minor,
                 "category": inv_category,
                 "payment_status": inv_status,
+                "file_sha256": doc_hash,
             }
         except ValueError as e:
-            st.error(f"Invalid monetary value: {e}")
+            st.error(f"Invalid invoice: {e}")
 
     # Duplicate Matching and Confirmation
     if "confirmed_invoice_data" in st.session_state:
         inv_data = st.session_state.confirmed_invoice_data
         st.markdown("---")
         st.markdown("### 🔍 Duplicate Check & Link Selection")
+        st.write("Reviewed snapshot to save:", inv_data)
 
         duplicates = database.find_potential_duplicates(
             date=inv_data["invoice_date"],
             amount_minor=inv_data["total_minor"],
             description=inv_data["merchant"],
+            invoice_number=inv_data["invoice_number"],
         )
 
         if duplicates:
@@ -536,7 +545,7 @@ with tab_invoices:
 
             link_choice = st.radio(
                 "How would you like to handle this invoice?",
-                options=["Create new expense", "Link to existing transaction"],
+                options=["Link to existing transaction", "Create new expense"],
                 key="duplicate_link_choice",
             )
 
@@ -553,68 +562,22 @@ with tab_invoices:
             selected_tx_id = None
 
         if st.button("Finalize and Save Receipt", type="primary", key="btn_finalize_invoice"):
-            if inv_data["payment_status"] == "unpaid":
-                # Unpaid commitment
-                inv_id = database.commit_unpaid_invoice(
-                    merchant=inv_data["merchant"],
-                    invoice_date=inv_data["invoice_date"],
-                    total_minor=inv_data["total_minor"],
-                    category=inv_data["category"],
-                    invoice_number=inv_data["invoice_number"],
-                )
-                st.success(f"✅ Saved as unpaid commitment (Invoice #{inv_id}). No change to actual spending.")
-            elif link_choice == "Link to existing transaction" and selected_tx_id:
-                # Link to existing
-                inv_id = database.commit_paid_invoice_linked(
-                    merchant=inv_data["merchant"],
-                    invoice_date=inv_data["invoice_date"],
-                    total_minor=inv_data["total_minor"],
-                    category=inv_data["category"],
-                    linked_transaction_id=selected_tx_id,
-                    invoice_number=inv_data["invoice_number"],
-                )
-                st.success(f"🔗 Linked invoice #{inv_id} to existing transaction #{selected_tx_id}. Spending unchanged.")
-            else:
-                # Create new expense
-                inv_month = inv_data["invoice_date"][:7]
-                stats_before = calculate_monthly_stats(inv_month)
-                cat_before = next(
-                    (c.spent_minor for c in stats_before.categories if c.category == inv_data["category"]),
-                    0,
-                )
-
-                inv_id, tx_id = database.commit_paid_invoice_as_new_expense(
-                    merchant=inv_data["merchant"],
-                    invoice_date=inv_data["invoice_date"],
-                    total_minor=inv_data["total_minor"],
-                    category=inv_data["category"],
-                    invoice_number=inv_data["invoice_number"],
-                )
-                st.success(f"🎉 Created new expense transaction #{tx_id} from invoice #{inv_id}!")
-
-                # Evaluate threshold crossing
-                budgets = database.get_budgets(inv_month)
-                cat_budget = budgets.get(inv_data["category"])
-                cat_after = cat_before + inv_data["total_minor"]
-
-                alerts = evaluate_threshold_crossings(
-                    month=inv_month,
-                    category=inv_data["category"],
-                    before_spent_minor=cat_before,
-                    after_spent_minor=cat_after,
-                    budget_minor=cat_budget,
-                )
-
-                for alert in alerts:
-                    st.warning(
-                        f"🚨 **Budget Alert**: {alert['category']} crossed {alert['threshold']}% limit!",
-                        icon="🚨",
-                    )
-                    # Attempt dispatch if publisher is available
-                    dispatch_alert_sync(alert, publish_alert)
-
-            del st.session_state["confirmed_invoice_data"]
-            st.rerun()
+            try:
+                previous_ids = {a["id"] for a in database.get_alerts()}
+                values = {k: v for k, v in inv_data.items() if k != "payment_status"}
+                if inv_data["payment_status"] == "unpaid":
+                    database.commit_unpaid_invoice(**values)
+                elif link_choice == "Link to existing transaction" and selected_tx_id:
+                    database.commit_paid_invoice_linked(**values, linked_transaction_id=selected_tx_id)
+                else:
+                    database.commit_paid_invoice_as_new_expense(**values)
+                dispatch_new_alerts(previous_ids)
+                del st.session_state["confirmed_invoice_data"]
+                st.session_state.invoice_draft = {"processing_path": "manual"}
+                st.session_state.invoice_version += 1
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
 
     # Display persisted invoices
     st.markdown("---")
@@ -633,7 +596,7 @@ with tab_invoices:
             }
             for i in month_invoices
         ])
-        st.dataframe(df_inv, hide_index=True)
+        st.dataframe(df_inv, hide_index=True, alt="Saved invoices with payment and linked-transaction status")
     else:
         st.write("No invoices recorded for this month.")
 
@@ -650,7 +613,7 @@ with tab_insights:
 
     stats = calculate_monthly_stats(selected_month)
     latest_report = database.get_latest_report(selected_month)
-    current_revision = database.get_transaction_revision(selected_month)
+    current_revision = database.get_report_revision(selected_month)
 
     is_stale = latest_report and (latest_report["transaction_revision"] != current_revision)
     if is_stale:
@@ -666,14 +629,10 @@ with tab_insights:
             # Prepare small aggregate statistics JSON
             stats_dict = stats.model_dump()
 
-            if AIService and config.is_dnotifier_configured():
+            if config.is_dnotifier_configured():
                 try:
-                    import asyncio
-                    ai_svc = AIService()
-                    # Call async method safely
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    analysis_result = loop.run_until_complete(ai_svc.analyze_month(stats_dict))
+                    ai_svc = AIService(DNotifierAdapter.from_environment())
+                    analysis_result = run_async(ai_svc.analyze_month, stats_dict)
 
                     # Validate with Pydantic
                     validated_report = MonthlyAnalysisReport(**analysis_result)
@@ -683,50 +642,22 @@ with tab_insights:
                         stats_json=json.dumps(stats_dict),
                         analysis_json=validated_report.model_dump_json(),
                         transaction_revision=current_revision,
+                        origin="dnotifier",
                     )
                     st.success("Analysis generated successfully!")
                     st.rerun()
-                except Exception as e:
+                except DNotifierError as e:
                     st.error(f"DNotifier AI execution error: {e}", icon="🚨")
             else:
-                # Deterministic fallback when DNotifier credentials/adapter not yet wired
-                st.info("Generating deterministic fallback analysis (DNotifier AI not configured).")
-                findings = []
-                recommendations = []
-
-                # Grounded findings from computed stats
-                for c in stats.categories:
-                    if c.over_budget_minor and c.over_budget_minor > 0:
-                        findings.append({
-                            "title": f"{c.category} exceeded limit",
-                            "severity": "high",
-                            "evidence": f"Rs {format_pkr(c.spent_minor)} spent vs {format_pkr(c.budget_minor)} limit; {format_pkr(c.over_budget_minor)} over.",
-                            "category": c.category,
-                        })
-                        recommendations.append({
-                            "action": f"Set a mid-month checkpoint for {c.category}.",
-                            "reason": f"{c.category} is {c.percent_used}% of its limit.",
-                            "category": c.category,
-                            "priority": "high",
-                        })
-
-                fallback_report = MonthlyAnalysisReport(
-                    summary=f"Analysis for {selected_month}: Net expenses {format_pkr(stats.net_expenses_minor)}.",
-                    findings=findings[:3],
-                    recommendations=recommendations[:3],
-                    limitations=["Calculated strictly from local aggregate numbers."],
-                )
-
-                database.save_report(
-                    month=selected_month,
-                    stats_json=json.dumps(stats_dict),
-                    analysis_json=fallback_report.model_dump_json(),
-                    transaction_revision=current_revision,
-                )
-                st.rerun()
+                st.error("DNotifier is unconfigured. Set app ID and secret privately in .env, then retry. No report was saved; local tracking remains available.")
 
     # Display Saved Report
     if latest_report:
+        st.caption(f"Report origin: {latest_report['origin']} | Created: {latest_report['created_at']}")
+        if latest_report["origin"] != "dnotifier":
+            st.warning("This legacy report may be a local fallback; it is not verified DNotifier output.")
+        with st.expander("Python-computed supporting facts (saved report snapshot)"):
+            st.json(json.loads(latest_report["stats_json"]))
         report_data = json.loads(latest_report["analysis_json"])
         st.markdown("---")
         st.markdown(f"### 📋 Executive Summary")

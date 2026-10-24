@@ -103,6 +103,7 @@ class ExpenseFact(Contract):
     description: str = Field(max_length=160)
     amount_minor: int = Field(ge=0)
     date: str
+    category: Optional[Category] = None
 
 
 class MonthlyStats(Contract):
@@ -112,6 +113,7 @@ class MonthlyStats(Contract):
     net_expenses_minor: int
     income_minor: int = Field(ge=0)
     overall_variance_minor: Optional[int] = None
+    overall_percent_used: Optional[float] = None
     categories: list[CategoryStats] = Field(max_length=len(CATEGORIES))
     largest_expenses: list[ExpenseFact] = Field(default_factory=list, max_length=10)
     data_notes: list[str] = Field(default_factory=list, max_length=10)

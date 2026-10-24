@@ -1,13 +1,12 @@
 """Threshold alert evaluation rules, durable persistence, and publisher dispatching."""
 
-import asyncio
 from datetime import datetime, timezone
 import inspect
 import logging
 from typing import Any, Callable, Dict, List, Optional
 
 import database
-from money import format_pkr
+from dnotifier_adapter import run_async
 
 logger = logging.getLogger(__name__)
 
@@ -28,14 +27,13 @@ def evaluate_threshold_crossings(
     if budget_minor is None or budget_minor <= 0:
         return []
 
-    # Threshold values in minor units
-    threshold_80_minor = int(budget_minor * 0.8)
+    # Cross-multiply: no rounding down or floating point at fractional-paisa boundaries.
     threshold_100_minor = budget_minor
 
     triggered: List[Dict[str, Any]] = []
 
     # 1. Check 80% crossing
-    if before_spent_minor < threshold_80_minor and after_spent_minor >= threshold_80_minor:
+    if before_spent_minor * 100 < budget_minor * 80 <= after_spent_minor * 100:
         alert_id = database.create_alert(
             month=month,
             category=category,
@@ -43,6 +41,7 @@ def evaluate_threshold_crossings(
             amount_minor=after_spent_minor,
             status="pending",
             db_path=db_path,
+            budget_minor=budget_minor,
         )
         if alert_id:
             triggered.append({
@@ -64,6 +63,7 @@ def evaluate_threshold_crossings(
             amount_minor=after_spent_minor,
             status="pending",
             db_path=db_path,
+            budget_minor=budget_minor,
         )
         if alert_id:
             triggered.append({
@@ -87,11 +87,7 @@ def build_alert_payload(alert: Dict[str, Any]) -> Dict[str, Any]:
         "category": alert["category"],
         "threshold_percent": alert["threshold"],
         "spent_minor": alert["amount_minor"],
-        "budget_minor": alert.get("budget_minor", 0),
-        "message": (
-            f"Alert: {alert['category']} spending reached {alert['threshold']}% of monthly budget "
-            f"({format_pkr(alert['amount_minor'])} spent in {alert['month']})."
-        ),
+        "budget_minor": alert.get("budget_minor"),
     }
 
 
@@ -106,42 +102,30 @@ def dispatch_alert_sync(
     Updates DB status to 'sent' or 'failed'.
     """
     alert_id = alert["id"]
+    saved = next((a for a in database.get_alerts(db_path=db_path) if a["id"] == alert_id), None)
+    if saved and saved["status"] == "sent":
+        return True
+    if saved:
+        alert = saved
     if publisher is None:
         return False
 
+    # Old events did not store the budget snapshot. Keep them pending rather than
+    # fabricate an original limit from a potentially edited budget.
+    if alert.get("budget_minor") is None:
+        return False
     payload = build_alert_payload(alert)
     try:
-        res = publisher(payload)
-        if inspect.isawaitable(res):
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            if loop.is_running():
-                # In an already running event loop, schedule as task
-                future = asyncio.ensure_future(res)
-                # We can't await synchronously in a running loop without blocking,
-                # but we can attach a done callback:
-                def on_done(fut):
-                    try:
-                        fut.result()
-                        database.update_alert_status(
-                            alert_id, "sent", datetime.now(timezone.utc).isoformat(), db_path=db_path
-                        )
-                    except Exception as ex:
-                        logger.error(f"Async publish failed: {ex}")
-                        database.update_alert_status(alert_id, "failed", db_path=db_path)
-
-                future.add_done_callback(on_done)
-                return True
-            else:
-                loop.run_until_complete(res)
+        async def invoke():
+            result = publisher(payload)
+            if inspect.isawaitable(result):
+                await result
+        run_async(invoke)
 
         now = datetime.now(timezone.utc).isoformat()
         database.update_alert_status(alert_id, "sent", now, db_path=db_path)
         return True
-    except Exception as e:
-        logger.warning(f"Failed to publish alert {alert_id}: {e}")
+    except Exception:
+        logger.warning("Failed to publish alert %s; retained for explicit retry.", alert_id)
         database.update_alert_status(alert_id, "failed", db_path=db_path)
         return False

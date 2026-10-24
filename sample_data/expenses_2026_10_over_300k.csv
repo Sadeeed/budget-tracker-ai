@@ -1,0 +1,11 @@
+date,description,amount,category,type
+2026-10-01,Synthetic Apartment Rent,100000,Housing,expense
+2026-10-03,Synthetic Monthly Grocery Shop,45000,Groceries,expense
+2026-10-05,Synthetic Fuel and Commuting,25000,Transport,expense
+2026-10-07,Synthetic Electricity and Internet,22000,Utilities,expense
+2026-10-09,Synthetic Dining Purchases,30000,Dining,expense
+2026-10-11,Synthetic Home Appliance Purchase,60000,Shopping,expense
+2026-10-14,Synthetic Medical Expenses,18000,Health,expense
+2026-10-17,Synthetic Course Fee,10000,Education,expense
+2026-10-20,Synthetic Recreation Purchases,5000,Entertainment,expense
+2026-10-23,Synthetic Software Subscriptions,5000,Subscriptions,expense

@@ -29,10 +29,11 @@ def parse_to_minor(val: Union[str, int, float, Decimal]) -> int:
         # Convert float via string representation to preserve decimal digits
         dec = Decimal(str(val))
     elif isinstance(val, str):
-        # Clean currency symbols, commas, whitespace
-        cleaned = re.sub(r"[^\d.-]", "", val.strip())
-        if not cleaned:
+        # Accept PKR formatting, not arbitrary text or foreign-currency symbols.
+        cleaned = re.sub(r"^(?:Rs\.?|PKR)\s*", "", val.strip(), flags=re.I)
+        if not re.fullmatch(r"[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?", cleaned):
             raise ValueError(f"Cannot parse monetary value from empty or invalid string: {val!r}")
+        cleaned = cleaned.replace(",", "")
         try:
             dec = Decimal(cleaned)
         except InvalidOperation as e:
@@ -40,6 +41,8 @@ def parse_to_minor(val: Union[str, int, float, Decimal]) -> int:
     else:
         raise TypeError(f"Unsupported amount type: {type(val)}")
 
+    if not dec.is_finite() or dec > Decimal(9223372036854775807) / MINOR_UNIT_FACTOR:
+        raise ValueError("Amount must be finite and within SQLite integer range.")
     if dec < 0:
         raise ValueError(
             f"Negative amount ({dec}) is not allowed. "

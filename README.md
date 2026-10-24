@@ -1,126 +1,130 @@
-# BudgetPilot — DNotifier Hackathon MVP
+# BudgetPilot
 
-BudgetPilot is a monthly expense and budget tracking assistant built for the **DNotifier Hackathon**. It combines deterministic financial arithmetic in Python with grounded monthly AI reviews and real-time threshold notifications.
+Single-user, PKR budget tracking for the DNotifier hackathon. Python owns financial
+facts; DNotifier interprets digital receipt text, reviews aggregate statistics and
+sends threshold alerts. All shipped financial data is synthetic.
 
----
-
-## Key Features
-
-1. **Deterministic Financial Engine**:
-   - Zero floating-point drift: all monetary values are parsed with `Decimal` and stored in integer minor units (1 PKR = 100 paisa).
-   - Strict transaction semantics: `net_expenses = sum(expenses) - sum(refunds)`. Transfers and income are tracked separately.
-   - Guarded Month-over-Month (MoM) calculations with division-by-zero protection.
-
-2. **Idempotent CSV Import**:
-   - Schema validation for `date, description, amount` (optional: `category, type`).
-   - File SHA-256 deduplication prevents accidental duplicate file re-imports.
-   - Row-level provenance (`import_id`, `source_row`) stored in SQLite.
-
-3. **Invoice & Receipt Review Workflow**:
-   - Digital text extraction via PyMuPDF for PDFs.
-   - Clear processing status reporting (`digital_text`, `dnotifier_image`, `local_ocr_fallback`, `manual`).
-   - Pre-commit editable review form.
-   - Paid vs Unpaid status: unpaid invoices are recorded as commitments only (0 change to actual spend).
-   - Duplicate transaction candidate matching: choose to **Link to existing transaction** (0 change to spend) or **Create new expense**.
-
-4. **DNotifier AI Grounded Monthly Review**:
-   - Never sends raw CSV bank dumps to the model; submits small, structured Python-computed statistics.
-   - Schema-validated output with up to 3 evidence-backed findings and 3 actionable recommendations.
-   - Automatic staleness detection: reports are marked **Outdated** when new transactions or budget edits occur.
-
-5. **Durable Budget Threshold Notifications**:
-   - Detects when category spend crosses **80%** or **100%** of monthly limits.
-   - DB uniqueness constraint: `UNIQUE(month, category, threshold)` ensures each alert is queued at most once.
-   - Persisted lifecycle: `pending` -> `sent` / `failed`.
-
----
-
-## Runtime & Installation
-
-The application requires **Python 3.10.x** and uses `constraints.txt` for verified compatibility.
+## Setup (Python 3.10.x only)
 
 ```bash
-# 1. Clone the repository and enter directory
-cd budget-tracker-ai-1
-
-# 2. Create Python 3.10 virtual environment
 python3.10 -m venv .venv
-source .venv/bin/activate
-
-# 3. Install dependencies with constraints applied
-pip install --upgrade pip
-pip install -r requirements.txt
-
-# 4. (Optional) Configure environment variables for live DNotifier integration
-cp .env.example .env
-# Edit .env with your DNOTIFIER_APP_ID and DNOTIFIER_SECRET
+.venv/bin/python -m pip install -c constraints.txt -r requirements.txt
+.venv/bin/python -m pip check
+.venv/bin/streamlit skills --yes
 ```
 
----
-
-## Running the Application
-
-### 1. Launch the Streamlit Dashboard
-```bash
-source .venv/bin/activate
-streamlit run app.py
-```
-Open `http://localhost:8501` in your browser.
-
-### 2. Run the Notification Subscriber (Optional for live WS demo)
-```bash
-source .venv/bin/activate
-python watch_alerts.py
-```
-
----
-
-## 90-Second Demo Walkthrough
-
-1. **Boot from Clean Database**:
-   - Launch `streamlit run app.py`. Notice the app initializes tables cleanly.
-2. **Import Spending History**:
-   - Go to the **📥 Import CSV** tab.
-   - Click **Download Sep 2026 Sample** and **Download Oct 2026 Sample**.
-   - Upload `expenses_2026_09.csv`, preview the validated rows, and click **Confirm and Commit Import**.
-   - Upload `expenses_2026_10.csv` and commit.
-   - Try re-uploading `expenses_2026_10.csv` again: observe the **Duplicate File** rejection banner preventing double-counting.
-3. **Configure Budgets**:
-   - In the sidebar, expand **Edit 2026-10 Budgets**.
-   - Set **Dining** limit to `10000` (Rs 10,000) and **Groceries** to `20000` (Rs 20,000). Click **Save Category Budgets**.
-4. **Inspect Overview & KPIs**:
-   - Switch to the **📊 Overview & KPIs** tab.
-   - Observe the **Top Over-Budget Category** card highlighting Dining (+Rs 7,200 overrun, 172% used).
-   - See the category budget progress bars color-coded (red for >100% overrun).
-5. **Add Receipt via Invoices Tab**:
-   - Switch to the **🧾 Invoices & Receipts** tab.
-   - Upload `sample_data/sample_invoice.pdf` (or `sample_data/sample_receipt.png`).
-   - Note the **Processing Path** badge (`digital_text`).
-   - Review the extracted fields (Al-Fatah Department Store, Rs 7,906, Groceries, Paid).
-   - Click **Proceed to Match & Save**.
-   - Notice the duplicate check runs; click **Finalize and Save Receipt**.
-   - Notice a **Budget Alert** banner appears if thresholds are crossed!
-6. **Verify Totals & Stale Status**:
-   - Return to the **Overview** tab: observe net spending increased by exactly Rs 7,906.
-   - Notice the banner now warns: **⚠️ Report Outdated: New financial data has been added**.
-7. **Run Monthly AI Review**:
-   - Switch to the **🤖 Monthly AI Insights** tab.
-   - Click **🚀 Analyze Month with DNotifier AI**.
-   - View the grounded findings (citing exact figures like Rs 17,200 spent on Dining vs Rs 10,000 budget) and actionable recommendations.
-
----
-
-## Running Automated Tests
-
-Run the full unit and integration test suite:
+If `.env` does not already exist, copy `.env.example` to `.env`. Enter the real
+`DNOTIFIER_APP_ID` and `DNOTIFIER_SECRET` privately there; a standalone API key is
+not assumed interchangeable. Select a provider/model enabled in your project's
+DNotifier AI Studio (`open_ai` / `gpt-4o-mini` was verified here). Never commit
+credentials. Process environment variables override `.env`.
 
 ```bash
-source .venv/bin/activate
-pytest -q
+# Dashboard
+.venv/bin/streamlit run app.py
+
+# Separate terminal: actual alert receiver; leave running during the demo
+.venv/bin/python watch_alerts.py
 ```
 
-### Test Coverage Summary:
-- `tests/test_finance.py`: Net expenses, refund offsets, income separation, transfer exclusion, MoM division-by-zero prevention, top expenses.
-- `tests/test_import.py`: CSV parsing, ISO date validation, negative amount rejection, file SHA-256 idempotency, row provenance.
-- `tests/test_invoices.py`: Unpaid invoice zero-spend invariant, paid linked invoice duplicate prevention, paid unmatched expense creation.
-- `tests/test_alerts.py`: 80% and 100% threshold crossings, multi-threshold single transactions, duplicate alert prevention, durable status transitions.
+The default SQLite file is `budgetpilot.db`. Use `BUDGETPILOT_DB_PATH` to select a
+different/fresh file without deleting existing data. Existing schemas receive
+additive migrations. Legacy reports are retained as `legacy_unverified` because
+their AI/local-fallback origin cannot be reconstructed. Legacy pending alerts
+without a budget snapshot are displayed but cannot safely be resent.
+
+## What works
+
+- Import normalized CSVs with `date,description,amount`; `category,type` are
+  optional columns. Use exact ISO dates and nonnegative amounts; types are
+  `expense`, `refund`, `income`, `transfer`. Edit or explicitly exclude invalid
+  rows; missing/unknown categories require review. Amounts remain decimal strings
+  until conversion to integer paisa. Financial calculations never use AI totals.
+- Exact-file imports are blocked. Potential cross-file duplicates require
+  acknowledgement; legitimate repeated purchases are not silently deleted.
+  Provenance, transactions and resulting pending alerts commit atomically.
+- Monthly category/overall budgets, spending, income, overrun and comparison
+  statistics. Budget inputs accept decimal PKR; blank removes a limit, zero is
+  an actual zero cap. Percent-used and threshold alerts require a positive limit.
+- Explicit DNotifier monthly review: strict response validation, saved supporting
+  statistics and AI provenance. Changes to budgets, current transactions or prior
+  month transactions mark the report outdated. AI failure never saves a local
+  fallback as an AI report. Grounding guards are not proof of every narrative claim.
+- Upload a digital PDF and click **Process receipt with DNotifier**. PyMuPDF
+  extracts text, DNotifier returns a draft, and editable fields must be reviewed
+  before a second explicit save. Missing merchant/date/total are not invented.
+  Matching uses amount, merchant similarity, date tolerance and available invoice
+  number. Link existing paid expenses without double counting; unpaid invoices
+  remain commitments. File hashes and merchant/invoice-number identity prevent
+  saving the same identifiable receipt twice, including concurrent submissions.
+- A new expense queues 80%/100% crossings in the same DB transaction. Sending
+  happens afterward: SDK failures do not undo expenses. Pending/failed events can
+  be explicitly retried in Overview; successful events are not resent on rerun.
+  Retries use the original budget snapshot. `sent` is sender success, not a
+  subscriber-delivery acknowledgement; ambiguous network failures may duplicate
+  delivery if manually retried. The subscriber is a separate CLI process.
+
+## Honest DNotifier status / limits
+
+Real authentication, `connect()`, HTTP `send_ai()`, digital-PDF/text interpretation,
+monthly reviews, WebSocket `send()` and separate-process receipt were exercised.
+`disconnect()` runs during cleanup. A headless fresh-DB demo verified two UI CSV
+imports → real AI review → real PDF draft → explicit paid confirmation → exactly
+Rs 850 additional spend → durable 100% alert received separately → updated review.
+Only the test file chooser was injected; no AI/SDK responses were mocked in that
+live run. It is not a manual browser-usability acceptance test.
+
+**Image processing remains blocked/unverified.** Prior synthetic image experiments
+did not recover image-only facts. PNG/JPG and scanned PDFs route to the DNotifier
+image capability first, which currently reports unavailability and preserves
+manual entry. They are not claimed as successful image interpretation. No local
+OCR, alternate AI provider, CSV AI categorizer or workflow observability is added;
+the MVP uses direct `send_ai` and `send` calls. Ordinary local tracking/manual
+entry remains usable without AI.
+
+Uploads are not stored; only reviewed metadata is persisted. PDF processing is
+bounded to 10 MiB, 1–4 pages and 16,000 text characters; multi-page mixed/scanned
+documents require manual review. Text PII redaction is best effort, not production
+privacy protection. Use synthetic demo documents. No bank login, payment features
+or production authentication are included.
+
+See [design](docs/DESIGN.md), [integration plan](docs/PARALLEL_PLAN.md),
+[checklist](docs/TODO.md) and [SDK evidence](docs/INTEGRATION_STATUS.md).
+
+## 90-second demo (allow extra time for live AI latency)
+
+1. Start the separate subscriber and dashboard with a fresh DB. Select `2026-10`.
+2. Import `sample_data/expenses_2026_09.csv` and `expenses_2026_10.csv`, reviewing
+   and explicitly confirming each. October net spend is **Rs 97,300**; Groceries
+   is **Rs 24,000**, Dining **Rs 17,200**. Re-upload October: exact-file rejection.
+3. Set Dining to `10000`, Groceries to `30000`. Run **Analyze Month with DNotifier
+   AI** and inspect its saved Python supporting facts.
+4. Upload `sample_data/sample_invoice.pdf`, click **Process receipt with
+   DNotifier**, verify its source values (Rs 7,906, October, Groceries), mark paid,
+   submit review, and finalize as a new expense. Net spend becomes **Rs 105,206**.
+5. Show the stale-report warning and the Groceries 100% event in the separate
+   subscriber. Review again to refresh insights. A linked/unpaid receipt does not
+   increase actuals. The PNG fixture needs manual entry, not verified image AI.
+
+## Verification commands
+
+```bash
+# Offline: no live SDK requests, including headless Streamlit regression tests
+.venv/bin/python -m pytest -q
+.venv/bin/python -m pip check
+
+# Opt-in real calls; synthetic data only (may incur usage)
+.venv/bin/python dnotifier_adapter.py --smoke-ai
+.venv/bin/python ai_service.py --smoke-month
+.venv/bin/python invoice_extract.py --smoke-invoice
+.venv/bin/python watch_alerts.py --smoke-delivery
+
+# Integrated headless live demo: three real AI calls plus a persisted-expense
+# alert sent to a separate receiver; writes only a new temporary demo database
+.venv/bin/python scripts/smoke_demo.py --live
+```
+
+Verified on Python **3.10.22**: constrained dependency installation and `pip check`
+passed; **131 tests passed**. The integrated live demo exited 0. Streamlit skills
+were installed and loaded: developing-with-streamlit with best-practices,
+session-state and testing references. A manual browser walkthrough remains open.

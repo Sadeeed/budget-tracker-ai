@@ -24,10 +24,10 @@
 - [x] Create a Python 3.10 virtual environment (`python3.10 -m venv .venv`), confirm its interpreter version, and include `-c constraints.txt` in `requirements.txt`. Install all dependencies under Python 3.10, run `python -m pip check`, and smoke-test imports; document incompatibilities rather than upgrading the Python target.
 - [x] After installing Streamlit, discover existing Streamlit agent skills; if missing and supported, install project-local skills with `streamlit skills --yes`. Load applicable skills before UI work and record which were used, or document CLI/skill availability blockers. See the [official skills CLI documentation](https://docs.streamlit.io/develop/api-reference/cli/skills).
 - [x] Create `DNOTIFIER_APP_ID`, `DNOTIFIER_SECRET`, and demo identity variables; no hardcoded secrets.
-- [ ] Install the Python SDK and test real AI auth with `DNotifier(transport="http")`, `connect()`, `send_ai(...)`, `disconnect()`. *(Dev 2)*
-- [ ] Inspect and document **actual AI response shape** in the adapter; check auth/AI availability via SDK where supported. *(Dev 2)*
+- [x] Install the Python SDK and test real AI auth with `DNotifier(transport="http")`, `connect()`, `send_ai(...)`, `disconnect()`. *(Reverified during integration.)*
+- [x] Inspect and document **actual AI response shape** in the adapter; check auth/AI availability via SDK where supported. *(Verified `data.content: str`; see INTEGRATION_STATUS.)*
 - [ ] Verify DNotifier image-processing support, actual SDK payload format, and account/model availability with a real synthetic receipt image; document results or blockers without inventing image parameters. *(Dev 2)*
-- [ ] Test a basic `transport="ws"` sender/subscriber pair with `send()` if time; if not, put the messaging smoke test first in P4. *(Dev 2)*
+- [x] Test a basic `transport="ws"` sender/subscriber pair with `send()` if time; if not, put the messaging smoke test first in P4. *(Separate-process delivery verified; integrated expense delivery also passed.)*
 - [x] Start `streamlit run app.py` and confirm the app bootstraps with no existing DB.
 
 **Gate:** If AI calls fail due to credential formatting, provider setup, or plan status, keep building the deterministic app but document the exact blocker—do not substitute another provider without authorization.
@@ -52,8 +52,8 @@
 - [x] Implement `finance.py`: monthly net spend, income, category spent, remaining, overage, and percentages.
 - [x] Compute MoM absolute/percentage changes only when previous-month data is present and denominator > 0.
 - [x] Render overview KPIs, category progress bars, and category breakdown chart.
-- [ ] Create prompt in `prompts.py` for grounded monthly budget analysis. *(Dev 2)*
-- [ ] Implement DNotifier AI adapter that submits **computed aggregate stats**, not the full CSV. *(Dev 2)*
+- [x] Create prompt in `prompts.py` for grounded monthly budget analysis. *(Dev 2, integrated.)*
+- [x] Implement DNotifier AI adapter that submits **computed aggregate stats**, not the full CSV. *(Dev 2, integrated; real UI action verified headlessly.)*
 - [x] Validate analysis JSON with Pydantic; recover gracefully from invalid/non-JSON model outputs.
 - [x] Show max three significant findings, max three actionable recommendations, and limitations.
 - [x] Persist analysis and its stats snapshot. Mark report **outdated** when budget or transaction data changes.
@@ -65,7 +65,7 @@
 
 - [x] Add PDF invoice upload; extract digital text with PyMuPDF.
 - [ ] Add PNG/JPG and rendered scanned-PDF pages using **DNotifier as the primary image processor**, behind the SDK adapter and using the verified image payload format. *(Dev 2)*
-- [ ] Parse DNotifier image results or sanitized digital-PDF text into the same validated invoice JSON fields (merchant/date/total/invoice number/category/confidence). *(Dev 2)*
+- [x] Parse DNotifier image results or sanitized digital-PDF text into the same validated invoice JSON fields (merchant/date/total/invoice number/category/confidence). *(Digital-PDF/text live verification passed; image capability remains blocked.)*
 - [ ] Only if DNotifier image processing is unsupported, unavailable, or insufficient, optionally use local OCR → DNotifier text parsing. Do not require Tesseract or any local OCR for the primary path; retain manual entry when extraction/AI is unavailable. *(Dev 2)*
 - [x] Display the actual processing path and failure status; never describe local OCR/manual fallback as successful DNotifier image processing.
 - [x] Show **editable review form**. If merchant/date/total are unknown, require the user to enter them.
@@ -83,8 +83,8 @@
 
 - [x] Implement threshold detector based on **before/after** category spend across transaction commit.
 - [x] Add DB uniqueness guard for 80% and 100% threshold notifications by month/category.
-- [ ] Implement DNotifier WS sender to `budgetpilot-user-demo` with structured alert payload. *(Dev 2)*
-- [ ] Create `watch_alerts.py` WS subscriber that prints received alerts under the user identity. *(Dev 2)*
+- [x] Implement DNotifier WS sender to `budgetpilot-user-demo` with structured alert payload. *(Integrated; expense-triggered delivery passed.)*
+- [x] Create `watch_alerts.py` WS subscriber that prints received alerts under the user identity. *(Real separate process verified.)*
 - [x] Persist status `pending/sent/failed`; allow failed sends to retry without duplicating thresholds.
 - [x] Display locally persisted alerts in the overview panel.
 - [x] Demonstrate a newly added paid invoice crossing at least one threshold.
@@ -98,10 +98,10 @@
 - [x] Test with September and October synthetic CSV data.
 - [x] Test receipt confirmation + duplicate matching + alert, then request an updated analysis.
 - [x] Validate no secrets in source, logs, or Streamlit widgets.
-- [ ] Write README setup (`pip install -r requirements.txt`; `.env`; run Streamlit; run subscriber), verified DNotifier image support, and optional local OCR fallback setup only if implemented.
-- [ ] Add a short **90-second demo script** to README.
-- [ ] Record any SDK quirks, unsupported features, known limitations and suggested follow-up work.
-- [ ] Ensure DNotifier workflow observability is visible if it was implemented; otherwise explain that the MVP uses direct `send_ai` and `send` calls.
+- [x] Write README setup (`pip install -r requirements.txt`; `.env`; run Streamlit; run subscriber), verified DNotifier image support, and optional local OCR fallback setup only if implemented. *(Image limitation explicitly recorded; no OCR installed.)*
+- [x] Add a short **90-second demo script** to README.
+- [x] Record any SDK quirks, unsupported features, known limitations and suggested follow-up work.
+- [x] Ensure DNotifier workflow observability is visible if it was implemented; otherwise explain that the MVP uses direct `send_ai` and `send` calls. *(Direct calls; workflows omitted.)*
 
 ## Stretch (ONLY after all gates pass)
 
@@ -113,6 +113,17 @@
 - [ ] Basic recurring merchant/subscription identification.
 
 ## Manual demo acceptance checklist
+
+Integration evidence (2026-10-24): constrained Python 3.10.22 install and pip check
+passed; 131 offline tests passed. `scripts/smoke_demo.py --live` passed a fresh-DB
+**headless** Streamlit two-import → live AI → reviewed PDF → persisted paid expense
+→ real separate-subscriber delivery → refreshed-report flow. Only the file chooser
+was injected. These automated checks do not mark the manual/browser checklist below
+complete. DNotifier image support stays blocked/unverified, optional OCR remains
+omitted. Earlier Dev 1 completion claims were corrected during integration: invented
+receipt defaults/local AI fallback removed, strict service boundaries wired, budget
+and comparison staleness fixed, CSV atomicity/review/duplicates and durable retries
+regression-tested. Details: `INTEGRATION_STATUS.md` and `tests/test_integration.py`.
 
 - [ ] Clean install and launch succeeds.
 - [ ] Two CSV files import without double counting.

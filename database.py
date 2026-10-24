@@ -1,10 +1,13 @@
 """SQLite schema and persistence repository helpers for BudgetPilot."""
 
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
+import hashlib
 import json
+import re
 import sqlite3
 from typing import Any, Dict, List, Optional, Tuple
-from config import DB_PATH
+from config import DB_PATH, STANDARD_EXPENSE_CATEGORIES
 
 DDL_STATEMENTS = [
     """
@@ -100,6 +103,11 @@ def init_db(db_path: Optional[str] = None) -> None:
     with get_connection(db_path) as conn:
         for stmt in DDL_STATEMENTS:
             conn.execute(stmt)
+        # Additive migrations retain existing demo data and label old reports honestly.
+        if "origin" not in {r[1] for r in conn.execute("PRAGMA table_info(reports)")}:
+            conn.execute("ALTER TABLE reports ADD COLUMN origin TEXT NOT NULL DEFAULT 'legacy_unverified'")
+        if "budget_minor" not in {r[1] for r in conn.execute("PRAGMA table_info(alerts)")}:
+            conn.execute("ALTER TABLE alerts ADD COLUMN budget_minor INTEGER")
         conn.commit()
 
 
@@ -127,6 +135,11 @@ def get_budgets(month: str, db_path: Optional[str] = None) -> Dict[str, int]:
             (month,),
         )
         return {row["category"]: row["limit_minor"] for row in cursor.fetchall()}
+
+
+def delete_budget(month, category, db_path=None):
+    with get_connection(db_path) as conn:
+        conn.execute("DELETE FROM budgets WHERE month = ? AND category = ?", (month, category))
 
 
 # --- Imports ---
@@ -158,40 +171,71 @@ def create_import(filename: str, file_sha256: str, db_path: Optional[str] = None
 
 # --- Transactions ---
 
+def commit_import(filename, file_sha256, rows, db_path=None):
+    """File provenance, financial rows and pending alerts succeed or roll back together."""
+    with get_connection(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM imports WHERE file_sha256 = ?", (file_sha256,)).fetchone():
+            raise ValueError("This file has already been imported.")
+        import_id = conn.execute(
+            "INSERT INTO imports(filename, file_sha256, imported_at) VALUES (?, ?, ?)",
+            (filename, file_sha256, utc_now_iso()),
+        ).lastrowid
+        ids = _insert_transactions(conn, [dict(row, import_id=import_id) for row in rows])
+        return import_id, ids
+
+
+def _category_total(conn, month, category):
+    return conn.execute(
+        """SELECT COALESCE(SUM(CASE type WHEN 'expense' THEN amount_minor
+           WHEN 'refund' THEN -amount_minor ELSE 0 END), 0) FROM transactions
+           WHERE substr(occurred_on, 1, 7) = ? AND category = ?""", (month, category)
+    ).fetchone()[0]
+
+
+def _queue_crossings(conn, month, category, before, after):
+    """Queue in the same write transaction as the expense; no SDK calls here."""
+    row = conn.execute("SELECT limit_minor FROM budgets WHERE month = ? AND category = ?",
+                       (month, category)).fetchone()
+    if row is None or row[0] <= 0:
+        return
+    for threshold in (80, 100):
+        if before * 100 < row[0] * threshold <= after * 100:
+            conn.execute(
+                """INSERT INTO alerts(month, category, threshold, amount_minor, status,
+                   created_at, budget_minor) VALUES (?, ?, ?, ?, 'pending', ?, ?)
+                   ON CONFLICT(month, category, threshold) DO NOTHING""",
+                (month, category, threshold, after, utc_now_iso(), row[0]),
+            )
+
+
+def _insert_transactions(conn, rows):
+    now = utc_now_iso()
+    ids = []
+    for r in rows:
+        month, category = r["occurred_on"][:7], r["category"]
+        before = _category_total(conn, month, category)
+        cursor = conn.execute(
+            """INSERT INTO transactions(occurred_on, description, merchant, amount_minor,
+               category, type, source, import_id, source_row, invoice_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (r["occurred_on"], r["description"], r.get("merchant"), r["amount_minor"],
+             category, r["type"], r["source"], r.get("import_id"), r.get("source_row"),
+             r.get("invoice_id"), r.get("created_at") or now),
+        )
+        ids.append(cursor.lastrowid)
+        if r["type"] == "expense":
+            _queue_crossings(conn, month, category, before, before + r["amount_minor"])
+    return ids
+
 def insert_transactions(
     rows: List[Dict[str, Any]],
     db_path: Optional[str] = None,
 ) -> List[int]:
     """Insert transaction rows atomically in a single transaction."""
-    now = utc_now_iso()
-    inserted_ids = []
     with get_connection(db_path) as conn:
-        for r in rows:
-            cursor = conn.execute(
-                """
-                INSERT INTO transactions (
-                    occurred_on, description, merchant, amount_minor, category,
-                    type, source, import_id, source_row, invoice_id, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-                """,
-                (
-                    r["occurred_on"],
-                    r["description"],
-                    r.get("merchant"),
-                    r["amount_minor"],
-                    r["category"],
-                    r["type"],
-                    r["source"],
-                    r.get("import_id"),
-                    r.get("source_row"),
-                    r.get("invoice_id"),
-                    r.get("created_at") or now,
-                ),
-            )
-            inserted_ids.append(cursor.lastrowid)
-        conn.commit()
-    return inserted_ids
+        conn.execute("BEGIN IMMEDIATE")
+        return _insert_transactions(conn, rows)
 
 
 def get_transactions(
@@ -247,35 +291,60 @@ def get_transaction_revision(month: str, db_path: Optional[str] = None) -> int:
         return int(row["cnt"]) * 100000 + int(row["id_sum"])
 
 
+def get_report_revision(month: str, db_path: Optional[str] = None) -> int:
+    """Fingerprint all report facts, including comparison-month data and budget edits."""
+    from finance import get_prior_month_str
+    facts = [get_transactions(month, db_path),
+             get_transactions(get_prior_month_str(month), db_path), get_budgets(month, db_path)]
+    return int(hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()[:15], 16)
+
+
+def normalize_vendor(value):
+    return " ".join(re.findall(r"\w+", value.casefold()))
+
+
 def find_potential_duplicates(
     date: str,
     amount_minor: int,
     description: str,
     db_path: Optional[str] = None,
+    invoice_number: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Find transactions with same date and amount, or similar description."""
     with get_connection(db_path) as conn:
         cursor = conn.execute(
             """
-            SELECT * FROM transactions
-            WHERE occurred_on = ? AND amount_minor = ?;
+            SELECT t.* FROM transactions t LEFT JOIN invoices i ON t.invoice_id = i.id
+            WHERE t.type = 'expense' AND t.amount_minor = ? AND
+              (abs(julianday(t.occurred_on) - julianday(?)) <= 3
+               OR (? IS NOT NULL AND i.invoice_number = ?));
             """,
-            (date, amount_minor),
+            (amount_minor, date, invoice_number, invoice_number),
         )
-        exact = [dict(r) for r in cursor.fetchall()]
-        if exact:
-            return exact
+        vendor = normalize_vendor(description)
+        return [dict(r) for r in cursor.fetchall() if SequenceMatcher(
+            None, vendor, normalize_vendor(r["merchant"] or r["description"])
+        ).ratio() >= 0.5]
 
-        # Search within 3 days tolerance
-        cursor = conn.execute(
-            """
-            SELECT * FROM transactions
-            WHERE abs(julianday(occurred_on) - julianday(?)) <= 3
-              AND amount_minor = ?;
-            """,
-            (date, amount_minor),
-        )
-        return [dict(r) for r in cursor.fetchall()]
+
+def _validate_invoice(conn, merchant, invoice_date, total_minor, category,
+                      invoice_number, file_sha256):
+    try:
+        valid_date = datetime.strptime(invoice_date, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        raise ValueError("Invoice date must be YYYY-MM-DD.") from None
+    if valid_date != invoice_date or not merchant.strip():
+        raise ValueError("Enter a merchant and an exact YYYY-MM-DD date.")
+    if type(total_minor) is not int or not 0 <= total_minor <= 9223372036854775807:
+        raise ValueError("Invoice total must be nonnegative integer minor units within SQLite range.")
+    if category not in STANDARD_EXPENSE_CATEGORIES:
+        raise ValueError("Choose an allowed expense category.")
+    for row in conn.execute("SELECT merchant, invoice_number, file_sha256 FROM invoices"):
+        if (file_sha256 and file_sha256 == row["file_sha256"]) or (
+            invoice_number and invoice_number == row["invoice_number"]
+            and normalize_vendor(merchant) == normalize_vendor(row["merchant"])
+        ):
+            raise ValueError("This receipt is already saved; no additional expense was created.")
 
 
 # --- Invoices ---
@@ -368,6 +437,9 @@ def commit_paid_invoice_as_new_expense(
     """Atomically commit a paid invoice and create exactly ONE new expense transaction."""
     now = utc_now_iso()
     with get_connection(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        _validate_invoice(conn, merchant, invoice_date, total_minor, category, invoice_number, file_sha256)
+        before = _category_total(conn, invoice_date[:7], category)
         # 1. Insert invoice
         inv_cursor = conn.execute(
             """
@@ -400,6 +472,7 @@ def commit_paid_invoice_as_new_expense(
             "UPDATE invoices SET linked_transaction_id = ? WHERE id = ?;",
             (transaction_id, invoice_id),
         )
+        _queue_crossings(conn, invoice_date[:7], category, before, before + total_minor)
         conn.commit()
         return invoice_id, transaction_id
 
@@ -417,6 +490,16 @@ def commit_paid_invoice_linked(
     """Commit a paid invoice linked to an existing transaction (0 change to spend)."""
     now = utc_now_iso()
     with get_connection(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        _validate_invoice(conn, merchant, invoice_date, total_minor, category, invoice_number, file_sha256)
+        target = conn.execute("SELECT * FROM transactions WHERE id = ?", (linked_transaction_id,)).fetchone()
+        if (target is None or target["type"] != "expense" or target["amount_minor"] != total_minor
+                or target["invoice_id"] is not None):
+            raise ValueError("Select an unlinked expense with the same amount.")
+        if (abs((datetime.strptime(target["occurred_on"], "%Y-%m-%d") - datetime.strptime(invoice_date, "%Y-%m-%d")).days) > 3
+                or SequenceMatcher(None, normalize_vendor(merchant),
+                                   normalize_vendor(target["merchant"] or target["description"])).ratio() < 0.5):
+            raise ValueError("Linked expense must match the merchant and be within three days.")
         cursor = conn.execute(
             """
             INSERT INTO invoices (
@@ -457,6 +540,8 @@ def commit_unpaid_invoice(
     """Commit an unpaid invoice (commitment only, no transaction created)."""
     now = utc_now_iso()
     with get_connection(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        _validate_invoice(conn, merchant, invoice_date, total_minor, category, invoice_number, file_sha256)
         cursor = conn.execute(
             """
             INSERT INTO invoices (
@@ -479,6 +564,7 @@ def save_report(
     analysis_json: str,
     transaction_revision: int,
     db_path: Optional[str] = None,
+    origin: str = "legacy_unverified",
 ) -> int:
     """Save an analysis report snapshot."""
     now = utc_now_iso()
@@ -486,11 +572,11 @@ def save_report(
         cursor = conn.execute(
             """
             INSERT INTO reports (
-                month, stats_json, analysis_json, transaction_revision, created_at
+                month, stats_json, analysis_json, transaction_revision, created_at, origin
             )
-            VALUES (?, ?, ?, ?, ?);
+            VALUES (?, ?, ?, ?, ?, ?);
             """,
-            (month, stats_json, analysis_json, transaction_revision, now),
+            (month, stats_json, analysis_json, transaction_revision, now, origin),
         )
         conn.commit()
         return cursor.lastrowid
@@ -520,6 +606,7 @@ def create_alert(
     amount_minor: int,
     status: str = "pending",
     db_path: Optional[str] = None,
+    budget_minor: Optional[int] = None,
 ) -> Optional[int]:
     """Record an alert event. Returns alert id or None if already exists."""
     now = utc_now_iso()
@@ -528,10 +615,10 @@ def create_alert(
         with get_connection(db_path) as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO alerts (month, category, threshold, amount_minor, status, created_at, sent_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?);
+                INSERT INTO alerts (month, category, threshold, amount_minor, status, created_at, sent_at, budget_minor)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
                 """,
-                (month, category, threshold, amount_minor, status, now, sent_at),
+                (month, category, threshold, amount_minor, status, now, sent_at, budget_minor),
             )
             conn.commit()
             return cursor.lastrowid

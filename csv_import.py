@@ -4,6 +4,7 @@ import csv
 from datetime import datetime
 import hashlib
 import io
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import ALL_CATEGORIES, STANDARD_EXPENSE_CATEGORIES, INCOME_CATEGORY
@@ -32,6 +33,8 @@ def validate_iso_date(date_str: str) -> str:
     Raises ValueError if invalid. Does NOT coerce unparseable dates to today.
     """
     cleaned = date_str.strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", cleaned):
+        raise ValueError("Invalid date format. Must be exact ISO format YYYY-MM-DD.")
     try:
         dt = datetime.strptime(cleaned, "%Y-%m-%d")
         return dt.strftime("%Y-%m-%d")
@@ -42,12 +45,12 @@ def validate_iso_date(date_str: str) -> str:
 
 
 def normalize_category(category_raw: Optional[str], tx_type: str) -> str:
-    """Normalize category to standard list or Other/Income."""
+    """Normalize known categories; preserve unknown/missing values for review."""
     if tx_type == TransactionType.INCOME.value:
         return INCOME_CATEGORY
 
     if not category_raw or not category_raw.strip():
-        return "Other"
+        return ""
 
     cat = category_raw.strip()
     # Case-insensitive match against allowed categories
@@ -55,7 +58,7 @@ def normalize_category(category_raw: Optional[str], tx_type: str) -> str:
         if standard.lower() == cat.lower():
             return standard
 
-    return "Other"
+    return cat
 
 
 def parse_and_validate_csv(
@@ -100,7 +103,7 @@ def parse_and_validate_csv(
     errors: List[Dict[str, Any]] = []
 
     for row_idx, row in enumerate(reader, start=1):
-        raw_date = row.get(date_col, "")
+        raw_date = row.get(date_col, "") or ""
         raw_desc = row.get(desc_col, "")
         raw_amount = row.get(amount_col, "")
         raw_cat = row.get(category_col, "") if category_col else ""
@@ -142,6 +145,10 @@ def parse_and_validate_csv(
 
         # Category normalization
         category = normalize_category(raw_cat, tx_type)
+        allowed = [INCOME_CATEGORY] if tx_type == "income" else STANDARD_EXPENSE_CATEGORIES
+        if category not in allowed:
+            errors.append({"source_row": row_idx, "error_message": "Choose an allowed category before import.", "raw": row})
+            continue
 
         valid_rows.append({
             "source_row": row_idx,
@@ -196,12 +203,21 @@ def commit_csv_import(
             f"File '{filename}' with hash {file_sha256[:8]} has already been imported on {existing['imported_at']}."
         )
 
-    import_id = database.create_import(filename, file_sha256, db_path=db_path)
-    rows_to_insert = []
+    if not approved_rows:
+        raise CSVValidationError("Select at least one row to import.")
     for r in approved_rows:
-        row_copy = dict(r)
-        row_copy["import_id"] = import_id
-        rows_to_insert.append(row_copy)
+        validate_iso_date(r["occurred_on"])
+        allowed = [INCOME_CATEGORY] if r["type"] == "income" else STANDARD_EXPENSE_CATEGORIES
+        if (not r["description"].strip() or r["category"] not in allowed or r["type"] not in VALID_TYPES
+                or type(r["amount_minor"]) is not int or not 0 <= r["amount_minor"] <= 9223372036854775807):
+            raise CSVValidationError("Edited rows contain invalid description, category, type or amount.")
+    return database.commit_import(filename, file_sha256, approved_rows, db_path)
 
-    inserted_ids = database.insert_transactions(rows_to_insert, db_path=db_path)
-    return import_id, inserted_ids
+
+def find_cross_file_duplicates(rows, db_path=None):
+    """Warn only: repeated legitimate purchases must remain user-controlled."""
+    def identity(row):
+        return (row["occurred_on"], database.normalize_vendor(row["description"]),
+                row["amount_minor"], row["type"])
+    existing = {identity(row) for row in database.get_transactions(db_path=db_path)}
+    return [row["source_row"] for row in rows if identity(row) in existing]

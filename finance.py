@@ -94,9 +94,10 @@ def calculate_monthly_stats(
     overall_variance = None
     overall_percent_used = None
 
-    if overall_budget is not None and overall_budget > 0:
+    if overall_budget is not None:
         overall_variance = net_expenses - overall_budget
-        overall_percent_used = round((net_expenses / overall_budget) * 100, 1)
+        if overall_budget > 0:
+            overall_percent_used = round((net_expenses / overall_budget) * 100, 1)
 
     # 3. Previous month transactions for MoM comparison
     prior_month = compare_month or get_prior_month_str(month)
@@ -125,8 +126,6 @@ def calculate_monthly_stats(
             over_budget = max(0, spent - budget)
             if budget > 0:
                 percent_used = round((spent / budget) * 100, 1)
-            else:
-                percent_used = 100.0 if spent > 0 else 0.0
 
         prev_spent = None
         mom_change = None

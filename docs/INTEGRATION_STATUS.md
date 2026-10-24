@@ -1,5 +1,90 @@
 # DNotifier integration status
 
+## Integrated Dev 1 + Dev 2 verification (2026-10-24 — current)
+
+This section supersedes historical statements below that UI wiring is unfinished.
+Image capability remains blocked/unverified; no new image-success claim is made.
+
+### Corrected design deviations and boundary mismatches
+
+- `app.py` now constructs `AIService(DNotifierAdapter.from_environment())`, calls
+  Dev 2's `run_async` wrapper, and routes explicit upload processing through
+  `process_invoice`. No invented receipt values or default receipt date/total.
+- AI schemas now accept Dev 1's `overall_percent_used` and largest-expense
+  `category`, retaining strict validation rather than dropping financial facts.
+- The publisher receives only the agreed structured alert fields. The first
+  integrated live attempt exposed that Dev 1's extra `message` field was rejected
+  by Dev 2's strict transport validator. It was removed, regression-tested against
+  that validator, and the live demo rerun successfully. The failed attempt is not
+  counted as delivery proof.
+- Credentials display **configured**, not connected. AI errors are recoverable;
+  no new local fallback report is saved. Legacy reports are preserved and labelled
+  `legacy_unverified` through an additive SQLite migration.
+- Report fingerprints include budgets and both current/prior-month transaction
+  facts. CSV amounts stay strings until Decimal conversion; categories/edited
+  values require validation, invalid rows stay editable, and cross-file duplicate
+  warnings require explicit acknowledgement.
+- Import provenance, expense writes and resulting pending alerts are atomic.
+  Invoice writes validate required fields, guard repeated file/merchant-number
+  identity, and validate links. Paid linked/unpaid receipts do not add spending.
+- Threshold comparisons use integer cross-products. Alert records retain their
+  original budget; explicit retries use Dev 2's async wrapper and never resend
+  an already-sent record on an ordinary rerun. Sender success is not a delivery ACK.
+  Legacy alerts without original budget snapshots cannot safely be resent.
+
+### Actual verification
+
+Python **3.10.22**, `.venv`, root constraints applied:
+
+```bash
+.venv/bin/python -m pip install -c constraints.txt -r requirements.txt
+.venv/bin/python -m pip check
+.venv/bin/streamlit skills --yes
+.venv/bin/python -m pytest -q
+.venv/bin/python dnotifier_adapter.py --smoke-ai
+.venv/bin/python ai_service.py --smoke-month
+.venv/bin/python invoice_extract.py --smoke-invoice
+.venv/bin/python scripts/smoke_demo.py --live
+```
+
+- Installation and dependency check passed. Previously missing local dependencies
+  were installed, including python-dateutil (now explicitly declared).
+- Official Streamlit skills installed and loaded with best-practices,
+  session-state and testing references; installation was not treated as usage.
+- **131 offline tests passed**, including fresh-DB AppTest startup, real local PDF
+  extraction, service-schema compatibility, UI CSV and receipt confirmation,
+  linking/unpaid invariants, upload-state resets, failure recovery, duplicate
+  protection, schema migration, atomic rollback, snapshots and async alert retries.
+  Default tests use explicit SDK doubles, never live credentials as success proof.
+- Live AI smoke authenticated, AI enabled, requested marker verified;
+  normalized success remains `data.content: str`.
+- Monthly service smoke exited 0 with grounded synthetic monetary figures.
+- Invoice service smoke exited 0: all five source comparisons passed, including
+  digital PDF extraction, grand total selection and preserved missing dates.
+- **Integrated live headless demo exited 0.** Fresh database:
+  `/tmp/opencode/budgetpilot-demo-yeiyahkq/demo.db`. Two CSVs were imported using
+  actual Streamlit commit actions, a real monthly report saved, a synthetic digital
+  PDF interpreted, and the editable draft checked against source before explicit
+  review/finalize actions. Exactly **85000 paisa (Rs 850)** was added. A durable
+  Groceries 100% event used the actual SDK WebSocket publisher and was matched
+  against receipt by a **separate authenticated subscriber process**. The old
+  report became stale and a second real analysis saved a current report.
+  Three real AI requests; **only the file chooser was injected**, not services,
+  PDF extraction, SDK responses, arithmetic, persistence or subscriber traffic.
+  The demo uses its own temporary DB, not the user's local database.
+
+### Remaining limits
+
+Manual/browser usability acceptance is not claimed by headless AppTest proof.
+Image processing stays unverified; image/scanned-PDF routing exposes manual
+fallback, not successful vision. Local OCR, category AI batching and workflow
+observability remain intentionally omitted; direct SDK `send_ai`/`send` only.
+Grounding checks are bounded guards, not complete semantic verification of prose.
+Network failures after an uncertain send may require a manual retry and can cause
+duplicate delivery; there is no exactly-once receiver acknowledgement protocol.
+
+---
+
 ## Live invoice text/PDF service verification (latest)
 
 Executed under Python 3.10 with the configured `open_ai/gpt-4o-mini`:
